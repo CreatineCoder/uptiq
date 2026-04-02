@@ -391,32 +391,27 @@ class CostTracker:
 ## 📦 Dataset Strategy
 
 ### Dual Dataset Approach
+Instead, we use **two complementary datasets** that reflect real-world RAG challenges: ambiguity and complex reasoning. 
 
-We use **two complementary datasets** to test both basic retrieval AND complex reasoning — exposing how each architecture handles different difficulty levels.
-
-#### Primary: Natural Questions (NQ) — Single-Hop QA
+#### Primary: Natural Questions (NQ) — Single-Hop QA / Ambiguity
 
 | Property | Value |
 |----------|-------|
-| **Source** | Google's Natural Questions via HuggingFace (`google-research-datasets/natural_questions`) |
-| **Size** | 1,000 sampled queries (from 300K+ total) |
-| **Type** | Real Google search queries with Wikipedia-based answers |
-| **Why** | Industry-standard, real-world queries, gold short+long answers |
-| **Ground Truth** | Annotated short answers + long answer spans |
+| **Source** | Google's Natural Questions (`google-research-datasets/natural_questions`) |
+| **Size** | 1,000 sampled queries |
+| **Type** | Real, anonymized Google search queries with Wikipedia-based answers |
+| **Why it tests CRAG** | Because they are real human questions, there is often high lexical mismatch with Wikipedia text. Naive RAG fails often, allowing CRAG to demonstrate its **Query Rewriting** capability. |
 
 #### Secondary: HotpotQA — Multi-Hop Reasoning
 
 | Property | Value |
 |----------|-------|
-| **Source** | HotpotQA via HuggingFace (`hotpot_qa`) |
-| **Size** | 500 sampled queries (from 113K+ total) |
-| **Type** | Questions requiring reasoning across 2+ Wikipedia articles |
-| **Why** | Exposes CRAG's self-correction advantage on hard multi-hop queries |
-| **Ground Truth** | Answers + supporting facts (sentence-level annotations) |
+| **Source** | HotpotQA (`hotpot_qa`) |
+| **Size** | 500 sampled queries |
+| **Type** | Questions requiring reasoning across multiple distinct Wikipedia articles |
+| **Why it tests CRAG** | Naive RAG usually fails to retrieve all necessary documents on the first pass. CRAG's **Relevance Grading** and **Web Search Fallback** capabilities shine here, executing multi-step reasoning before answering. |
 
 **Total: 1,500 queries** (exceeds the 1,000 minimum requirement)
-
-> **📝 Research Required:** Investigate which specific NQ configuration on HuggingFace is best for our use case: `natural_questions` vs `nq_open` vs `sentence-transformers/natural-questions`. The `nq_open` variant may be simpler to work with for short-answer evaluation.
 
 #### Corpus Processing Pipeline
 
