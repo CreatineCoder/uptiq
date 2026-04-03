@@ -1,0 +1,60 @@
+# ============================================================
+# Default Benchmark Configuration
+# ============================================================
+# This config controls the full benchmark pipeline.
+# Environment variables can be referenced as ${VAR_NAME}.
+
+experiment:
+  name: "naive_rag_vs_crag_benchmark"
+  seed: 42
+  description: "Comparing Naive RAG vs Corrective Agentic RAG on NQ + HotpotQA"
+
+# Dataset
+dataset:
+  path: "data/processed/benchmark_dataset.jsonl"
+  total_queries: 1500         # Set lower for pilot runs (e.g., 50)
+  
+# Vector Store
+vector_store:
+  persist_directory: "data/corpus/chroma_db"
+  embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+  top_k: 5
+
+# Agent Configuration
+agents:
+  naive_rag:
+    enabled: true
+    model: "gpt-4o-mini"
+    temperature: 0.0
+  corrective_rag:
+    enabled: true
+    model: "gpt-4o-mini"
+    temperature: 0.0
+    max_rewrite_retries: 2
+    max_hallucination_retries: 1
+    min_relevant_docs: 2
+    tavily_api_key: "${TAVILY_API_KEY}"
+
+# Evaluation
+evaluation:
+  # Quantitative metrics (run on ALL queries, no API cost)
+  quantitative:
+    enabled: true
+    metrics: ["exact_match", "f1", "recall_at_5", "mrr"]
+  
+  # RAGAS evaluation (run on ALL queries, uses LLM)  
+  ragas:
+    enabled: true
+    metrics: ["faithfulness", "answer_relevancy", "context_precision", "context_recall"]
+  
+  # LLM-as-a-Judge (run on SAMPLED queries only)
+  llm_judge:
+    enabled: true
+    model: "gpt-4o"
+    sample_size: 200            # 100 from NQ + 100 from HotpotQA
+    criteria: ["correctness", "completeness", "reasoning_quality"]
+
+# Output
+output:
+  results_dir: "data/results"
+  checkpoint_interval: 10       # Save checkpoint every N queries
