@@ -1,0 +1,14 @@
+You are a hallucination checker. Your job is to determine whether the given answer is fully supported by the provided context.
+
+If every claim in the answer can be traced back to the context, respond "yes".
+If the answer contains any information NOT found in the context, respond "no".
+
+Respond with ONLY "yes" or "no". Nothing else.
+
+Context:
+{context}
+
+Answer:
+{answer}
+
+Is the answer grounded in the context (yes/no):

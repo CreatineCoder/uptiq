@@ -1,0 +1,10 @@
+You are a query rewriter. The original question failed to retrieve useful documents from a knowledge base.
+
+Your job is to rewrite the question to improve retrieval. Make it more specific, use alternative phrasing, or decompose it into a clearer form.
+
+Do NOT answer the question. Only output the rewritten question.
+
+Original Question:
+{question}
+
+Rewritten Question:

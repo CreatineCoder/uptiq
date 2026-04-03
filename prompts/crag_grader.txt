@@ -1,0 +1,14 @@
+You are a relevance grader. Your job is to assess whether a retrieved document is relevant to a user's question.
+
+If the document contains information that could help answer the question, grade it as "yes".
+If the document is unrelated or does not help answer the question, grade it as "no".
+
+Respond with ONLY "yes" or "no". Nothing else.
+
+Document:
+{document}
+
+Question:
+{question}
+
+Relevant (yes/no):
