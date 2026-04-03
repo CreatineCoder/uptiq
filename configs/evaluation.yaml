@@ -23,9 +23,9 @@ evaluation:
 
   llm_judge:
     enabled: true
-    model: "gpt-4o"
+    model: "gpt-4o-mini"
     temperature: 0.0
-    sample_size: 200          # 100 NQ + 100 HotpotQA (stratified)
+    sample_size: 1000         # Grade all queries
     criteria:
       - correctness
       - completeness

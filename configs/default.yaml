@@ -12,7 +12,7 @@ experiment:
 # Dataset
 dataset:
   path: "data/processed/benchmark_dataset.jsonl"
-  total_queries: 1500         # Set lower for pilot runs (e.g., 50)
+  total_queries: 1000         # As requested in the problem statement
   
 # Vector Store
 vector_store:
@@ -47,11 +47,11 @@ evaluation:
     enabled: true
     metrics: ["faithfulness", "answer_relevancy", "context_precision", "context_recall"]
   
-  # LLM-as-a-Judge (run on SAMPLED queries only)
+  # LLM-as-a-Judge
   llm_judge:
     enabled: true
-    model: "gpt-4o"
-    sample_size: 200            # 100 from NQ + 100 from HotpotQA
+    model: "gpt-4o-mini"        # Switched to 4o-mini per your request
+    sample_size: 1000           # Now grading ALL 1000 queries
     criteria: ["correctness", "completeness", "reasoning_quality"]
 
 # Output
