@@ -96,16 +96,63 @@ NAIVE_COLOR = "#6366f1"
 CRAG_COLOR = "#f97316"
 
 def main():
-    st.set_page_config(page_title="RAG Benchmark Dashboard", page_icon="📊", layout="wide")
+    st.set_page_config(page_title="RAG Benchmark Dashboard", page_icon=None, layout="wide")
     
-    st.title("📊 Naive RAG vs Corrective RAG — Benchmark Dashboard")
+    st.title("Naive RAG vs Corrective RAG — Benchmark Dashboard")
     st.markdown("---")
     
     # Load data
-    naive_results, crag_results, analysis, summary, judge_results = load_results()
+    st.sidebar.header("Data Sources")
+    
+    # Auto-detect available results directories
+    base_results = os.path.join(project_root, "data", "results")
+    
+    valid_dirs = {}  # display_name -> full_path
+    
+    # First, add named subdirectory runs (e.g. nq_10, hotpot_20)
+    for d in sorted(os.listdir(base_results)):
+        full_d = os.path.join(base_results, d)
+        if os.path.isdir(full_d):
+            files = os.listdir(full_d)
+            if any(f.endswith('.jsonl') for f in files):
+                valid_dirs[d] = full_d
+    
+    # Also add the root results dir if it has result files
+    root_files = os.listdir(base_results)
+    if any(f.endswith('.jsonl') for f in root_files if os.path.isfile(os.path.join(base_results, f))):
+        valid_dirs["data/results (default)"] = base_results
+    
+    if not valid_dirs:
+        valid_dirs["data/results (default)"] = base_results
+    
+    run_options = list(valid_dirs.keys())
+    selected_run = st.sidebar.selectbox("Select Benchmark Run", run_options, index=0)
+    selected_results_full_path = valid_dirs[selected_run]
+    
+    @st.cache_data
+    def load_run_data(full_path):
+        naive = _load_jsonl(os.path.join(full_path, "naive_rag_results.jsonl"))
+        crag = _load_jsonl(os.path.join(full_path, "crag_results.jsonl"))
+        
+        analysis = {}
+        analysis_path = os.path.join(full_path, "analysis_report.json")
+        if os.path.exists(analysis_path):
+            with open(analysis_path, "r") as f:
+                analysis = json.load(f)
+        
+        summary = {}
+        summary_path = os.path.join(full_path, "run_summary.json")
+        if os.path.exists(summary_path):
+            with open(summary_path, "r") as f:
+                summary = json.load(f)
+        
+        judge = _load_jsonl(os.path.join(full_path, "judge_results.jsonl"))
+        return naive, crag, analysis, summary, judge
+
+    naive_results, crag_results, analysis, summary, judge_results = load_run_data(selected_results_full_path)
     
     if not naive_results and not crag_results:
-        st.error("No benchmark results found. Run the benchmark first: `python evaluation/scripts/run_benchmark.py --config configs/default.yaml`")
+        st.error(f"No benchmark results found in '{selected_run}'. Please run the benchmark first.")
         return
     
     naive_df = results_to_df(naive_results)
@@ -113,7 +160,7 @@ def main():
     combined_df = pd.concat([naive_df, crag_df], ignore_index=True)
     
     # ── Sidebar Filters ──
-    st.sidebar.header("🔍 Filters")
+    st.sidebar.header("Filters")
     selected_dataset = st.sidebar.selectbox("Dataset", ["All", "nq", "hotpotqa"])
     selected_difficulty = st.sidebar.selectbox("Difficulty", ["All", "single-hop", "multi-hop"])
     selected_agent = st.sidebar.selectbox("Agent", ["Both", "naive_rag", "corrective_rag"])
@@ -128,7 +175,7 @@ def main():
         filtered = filtered[filtered["agent_type"] == selected_agent]
     
     # ── KPI Row ──
-    st.header("📈 Key Metrics")
+    st.header("Key Metrics")
     col1, col2, col3, col4, col5, col6 = st.columns(6)
     
     naive_filtered = filtered[filtered["agent_type"] == "naive_rag"]
@@ -150,7 +197,7 @@ def main():
     st.markdown("---")
     
     # ── Tab Layout ──
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Charts", "🔍 Query Browser", "❌ Failure Analysis", "🧮 Statistics", "📥 Export"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Charts", "Query Browser", "Failure Analysis", "Statistics", "Export"])
     
     with tab1:
         st.subheader("Overall Comparison")
@@ -191,7 +238,7 @@ def main():
             st.plotly_chart(fig3, use_container_width=True)
     
     with tab2:
-        st.subheader("🔍 Side-by-Side Query Browser")
+        st.subheader("Side-by-Side Query Browser")
         
         # Get common query IDs
         naive_ids = set(naive_df["query_id"].tolist())
@@ -212,19 +259,19 @@ def main():
                 
                 col_n, col_c = st.columns(2)
                 with col_n:
-                    st.markdown("### 🔵 Naive RAG")
+                    st.markdown("### Naive RAG")
                     st.markdown(f"**Answer:** {n_row['predicted_answer']}")
                     st.markdown(f"EM: `{n_row['exact_match']}` | F1: `{n_row['f1']:.3f}` | Latency: `{n_row['latency']:.2f}s`")
                 
                 with col_c:
                     if c_row is not None:
-                        st.markdown("### 🟠 Corrective RAG")
+                        st.markdown("### Corrective RAG")
                         st.markdown(f"**Answer:** {c_row['predicted_answer']}")
                         st.markdown(f"EM: `{c_row['exact_match']}` | F1: `{c_row['f1']:.3f}` | Latency: `{c_row['latency']:.2f}s`")
                         st.markdown(f"**Steps:** {c_row['steps']}")
     
     with tab3:
-        st.subheader("❌ Failure Mode Analysis")
+        st.subheader("Failure Mode Analysis")
         if analysis:
             col_fm1, col_fm2 = st.columns(2)
             with col_fm1:
@@ -245,7 +292,7 @@ def main():
             crag_comp = analysis.get("corrective_rag", {}).get("component_analysis", {})
             if crag_comp:
                 st.markdown("---")
-                st.subheader("🔄 CRAG Component Analysis")
+                st.subheader("CRAG Component Analysis")
                 col_r, col_w, col_h = st.columns(3)
                 with col_r:
                     rw = crag_comp.get("rewrites", {})
@@ -260,12 +307,12 @@ def main():
                     st.metric("Hallucination Retries", f"{hr.get('triggered', 0)} ({hr.get('trigger_rate', 0)}%)")
     
     with tab4:
-        st.subheader("🧮 Statistical Significance Tests")
+        st.subheader("Statistical Significance Tests")
         if analysis and "significance_tests" in analysis:
             for metric, result in analysis["significance_tests"].items():
-                with st.expander(f"📊 {metric.replace('_', ' ').title()}", expanded=True):
-                    sig_icon = "✅" if result.get("significant") else "❌"
-                    st.markdown(f"**p-value:** `{result.get('p_value', 'N/A'):.6f}` {sig_icon}")
+                with st.expander(f"Metrics: {metric.replace('_', ' ').title()}", expanded=True):
+                    sig_status = "Significant" if result.get("significant") else "Not Significant"
+                    st.markdown(f"**p-value:** `{result.get('p_value', 'N/A'):.6f}` ({sig_status})")
                     st.markdown(f"**Effect size:** `{result.get('effect_size', 'N/A')}`")
                     st.markdown(f"**Naive Mean:** `{result.get('naive_mean', 'N/A')}` | **CRAG Mean:** `{result.get('crag_mean', 'N/A')}`")
                     if "crag_wins" in result:
@@ -274,7 +321,7 @@ def main():
             st.info("Run `python src/analysis/analyzer.py` first to generate significance tests.")
     
     with tab5:
-        st.subheader("📥 Download Results")
+        st.subheader("Download Results")
         st.download_button("Download Naive RAG Results (CSV)", naive_df.to_csv(index=False), "naive_rag_results.csv", "text/csv")
         st.download_button("Download CRAG Results (CSV)", crag_df.to_csv(index=False), "crag_results.csv", "text/csv")
         st.download_button("Download Combined Results (CSV)", combined_df.to_csv(index=False), "combined_results.csv", "text/csv")

@@ -89,16 +89,20 @@ class BenchmarkRunner:
     def _load_dataset(self) -> List[Dict]:
         """Load the benchmark dataset from JSONL."""
         dataset_path = self.config["dataset"]["path"]
+        dataset_filter = self.config["dataset"].get("filter_dataset")
         data = []
         with open(dataset_path, "r", encoding="utf-8") as f:
             for line in f:
-                data.append(json.loads(line.strip()))
+                item = json.loads(line.strip())
+                if dataset_filter and item.get("dataset") != dataset_filter:
+                    continue
+                data.append(item)
         
         # Apply pilot limit
-        total = self.pilot if self.pilot else self.config["dataset"]["total_queries"]
+        total = self.pilot if self.pilot else self.config["dataset"].get("total_queries", len(data))
         data = data[:total]
         
-        logger.info(f"[Runner] Loaded {len(data)} queries from {dataset_path}")
+        logger.info(f"[Runner] Loaded {len(data)} queries from {dataset_path} (Filter: {dataset_filter})")
         return data
     
     def _run_agent_on_query(self, agent, query_item: Dict, agent_type: str, cost_tracker: CostTracker) -> Dict:
@@ -258,33 +262,45 @@ class BenchmarkRunner:
         logger.info(f"[Runner] Judge token usage: {judge.get_token_usage()}")
     
     def _run_ragas_evaluation(self):
-        """Run RAGAS evaluation (Faithfulness, Answer Relevancy, Context Precision/Recall) on all results."""
+        """Run RAGAS evaluation on all results (batched)."""
         from src.evaluation.ragas_evaluator import RagasEvaluator
         
-        logger.info(f"[Runner] Running RAGAS evaluation on all results...")
+        logger.info(f"[Runner] Running RAGAS evaluation (Batch Mode)...")
         ragas = RagasEvaluator()
         
         ragas_results_path = os.path.join(self.config["output"]["results_dir"], "ragas_results.jsonl")
+        
+        # Clear previous RAGAS results to prevent duplicates
+        if os.path.exists(ragas_results_path):
+            os.remove(ragas_results_path)
+            logger.info(f"[Runner] Cleared old RAGAS results.")
         
         for agent_type in ["naive_rag", "corrective_rag"]:
             results = self.result_collector.load_all_results(agent_type)
             if not results:
                 continue
             
-            logger.info(f"[Runner] RAGAS: Evaluating {len(results)} {agent_type} results...")
+            logger.info(f"[Runner] RAGAS: Batch evaluating {len(results)} {agent_type} queries...")
             
+            # Prepare batch data
+            batch_data = []
             for r in results:
-                ragas_scores = ragas.evaluate_single(
-                    question=r["question"],
-                    answer=r["predicted_answer"],
-                    contexts=r.get("retrieved_contexts", []),
-                    gold_answer=r["gold_answer"]
-                )
-                
+                batch_data.append({
+                    "question": r["question"],
+                    "answer": r["predicted_answer"],
+                    "contexts": r.get("retrieved_contexts", []),
+                    "gold_answer": r["gold_answer"]
+                })
+            
+            # Run batch evaluation
+            all_scores = ragas.evaluate_batch(batch_data)
+            
+            # Save results
+            for r, scores in zip(results, all_scores):
                 ragas_entry = {
                     "query_id": r["query_id"],
                     "agent_type": agent_type,
-                    "ragas_scores": ragas_scores
+                    "ragas_scores": scores
                 }
                 with open(ragas_results_path, "a", encoding="utf-8") as f:
                     f.write(json.dumps(ragas_entry) + "\n")

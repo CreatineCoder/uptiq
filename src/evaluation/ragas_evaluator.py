@@ -30,6 +30,11 @@ class RagasEvaluator:
             from ragas.metrics import faithfulness, answer_relevancy, context_precision, context_recall
             from ragas import evaluate
             from ragas.dataset_schema import SingleTurnSample, EvaluationDataset
+            from langchain_openai import ChatOpenAI
+            from langchain_huggingface import HuggingFaceEmbeddings
+            
+            self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+            self.embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
             
             self.faithfulness = faithfulness
             self.answer_relevancy = answer_relevancy
@@ -39,7 +44,7 @@ class RagasEvaluator:
             self.SingleTurnSample = SingleTurnSample
             self.EvaluationDataset = EvaluationDataset
             self._available = True
-            logger.info("[RAGAS] RAGAS library loaded successfully.")
+            logger.info("[RAGAS] RAGAS library loaded successfully with explicit LLM/Embeddings.")
         except ImportError as e:
             logger.warning(f"[RAGAS] RAGAS library not available: {e}. Using fallback scoring.")
             self._available = False
@@ -71,7 +76,9 @@ class RagasEvaluator:
             
             result = self.evaluate(
                 dataset=dataset,
-                metrics=[self.faithfulness, self.answer_relevancy, self.context_precision, self.context_recall]
+                metrics=[self.faithfulness, self.answer_relevancy, self.context_precision, self.context_recall],
+                llm=self.llm,
+                embeddings=self.embeddings
             )
             
             scores = result.to_pandas().iloc[0].to_dict()
@@ -114,7 +121,9 @@ class RagasEvaluator:
             
             result = self.evaluate(
                 dataset=dataset,
-                metrics=[self.faithfulness, self.answer_relevancy, self.context_precision, self.context_recall]
+                metrics=[self.faithfulness, self.answer_relevancy, self.context_precision, self.context_recall],
+                llm=self.llm,
+                embeddings=self.embeddings
             )
             
             df = result.to_pandas()

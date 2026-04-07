@@ -387,5 +387,10 @@ def _performance_by_difficulty(naive: List[Dict], crag: List[Dict]) -> Dict:
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Analyze RAG Benchmark Results")
+    parser.add_argument("--results-dir", type=str, default="data/results", help="Directory containing JSONL results")
+    args = parser.parse_args()
+    
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s', datefmt='%H:%M:%S')
-    run_full_analysis("data/results")
+    run_full_analysis(args.results_dir)
