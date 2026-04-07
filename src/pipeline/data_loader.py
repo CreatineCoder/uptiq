@@ -50,25 +50,28 @@ def build_benchmark_dataset():
             }
         })
 
-    # 2. Natural Questions (1000 samples)
-    # Using 'nq_open' which is the pre-processed version for RAG (no HTML, clean answers)
-    logging.info("Downloading Natural Questions (nq_open)...")
+    # 2. SQuAD v2 (1000 samples with answers)
+    # Filter to only questions that have at least one answer
+    logging.info("Downloading and filtering SQuAD v2 (validation)...")
     try:
-        nq = load_dataset('nq_open', split='validation[:1000]')
+        squad = load_dataset('squad_v2', split='validation')
+        # Filter for only answerable questions (where answers['text'] is not empty)
+        squad_answerable = squad.filter(lambda x: len(x['answers']['text']) > 0)
+        squad_samples = squad_answerable.select(range(min(1000, len(squad_answerable))))
         
-        for i, item in enumerate(tqdm(nq, desc="Processing Natural Questions")):
-            # nq_open has 'question' and 'answer' (list of strings)
+        for item in tqdm(squad_samples, desc="Processing SQuAD"):
+            # squad_v2 has 'question', 'context', and 'answers' (list of dicts)
             benchmark_data.append({
-                "id": f"nq_{i}",
+                "id": f"squad_{item['id']}",
                 "question": item["question"],
-                "gold_answer": item["answer"][0] if item["answer"] else "UNANSWERABLE",
-                "gold_context": "Context not available in nq_open. This will be retrieved from Wikipedia during the benchmark.",
-                "dataset": "nq",
+                "gold_answer": item['answers']['text'][0],
+                "gold_context": item["context"],
+                "dataset": "squad_v2",
                 "difficulty": "single-hop",
                 "supporting_facts": None
             })
     except Exception as e:
-        logging.error(f"Failed to load NQ: {e}")
+        logging.error(f"Failed to load SQuAD: {e}")
 
     # 3. Save to unified JSONL
     logging.info(f"Saving {len(benchmark_data)} queries to {output_path}...")

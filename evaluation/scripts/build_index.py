@@ -20,9 +20,18 @@ def build_index():
         logging.error(f"Dataset not found at {data_path}. Run data_loader.py first.")
         return
         
-    chunker = TextChunker(chunk_size=2000, chunk_overlap=200) 
+    chunker = TextChunker(chunk_size=600, chunk_overlap=150) 
     vector_store = VectorStoreWrapper(persist_directory=persist_dir)
     
+    # CLEAR EXISTING COLLECTION to prevent duplicates
+    try:
+        vector_store.vector_store.delete_collection()
+        # Re-initialize after deletion
+        vector_store = VectorStoreWrapper(persist_directory=persist_dir)
+        logging.info("Cleared existing ChromaDB collection for a clean rebuild.")
+    except Exception as e:
+        logging.warning(f"Could not clear collection: {e}")
+
     unique_contexts = set()
     logging.info("Reading dataset and extracting unique contexts...")
     

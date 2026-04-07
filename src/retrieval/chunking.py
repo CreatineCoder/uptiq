@@ -4,9 +4,9 @@ class TextChunker:
     """
     Handles splitting full documents into smaller chunks for vector database indexing.
     """
-    def __init__(self, chunk_size: int = 2000, chunk_overlap: int = 200):
-        # We use character length as a proxy for tokens (approx 4 chars per token).
-        # So chunk_size=2000 ~ 500 tokens. chunk_overlap=200 ~ 50 tokens.
+    def __init__(self, chunk_size: int = 600, chunk_overlap: int = 150):
+        # Optimized for performance: chunk_size=600 (~150 tokens) and overlap=150 (~35 tokens).
+        # Smaller chunks allow for more precise retrieval and higher top_k diversity.
         self.splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,

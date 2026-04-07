@@ -39,9 +39,9 @@ class NaiveRAGAgent(BaseAgent):
         logger.info(f"[NaiveRAG] Starting query processing: '{query}'")
         start_time = time.time()
         
-        # Step 1: Retrieve context
-        logger.info(f"[NaiveRAG] Retrieving top-5 documents from ChromaDB...")
-        retrieved_docs = self.vector_store.retrieve(query, top_k=5)
+        # Step 1: Retrieve context - Increased top_k to 10 for better coverage with smaller chunks
+        logger.info(f"[NaiveRAG] Retrieving top-10 documents from ChromaDB...")
+        retrieved_docs = self.vector_store.retrieve(query, top_k=10)
         context_texts = [doc.page_content for doc in retrieved_docs]
         context_str = "\n\n".join(context_texts)
         logger.info(f"[NaiveRAG] Successfully retrieved {len(context_texts)} documents.")

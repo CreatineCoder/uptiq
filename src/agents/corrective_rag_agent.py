@@ -84,11 +84,12 @@ class CorrectiveRAGAgent(BaseAgent):
     # 2. Define each node in the graph
     # -----------------------------------------------------------------------
     def _retrieve(self, state: CRAGState) -> CRAGState:
-        """Node 1: Retrieve top-5 documents from ChromaDB."""
+        """Node 1: Retrieve top-10 documents from ChromaDB."""
         query = state["current_query"]
         logger.info(f"[CRAG] RETRIEVE — Searching ChromaDB for: '{query}'")
         
-        docs = self.vector_store.retrieve(query, top_k=5)
+        # INCREASED top_k to 10 to match new indexing strategy
+        docs = self.vector_store.retrieve(query, top_k=10)
         doc_texts = [doc.page_content for doc in docs]
         
         logger.info(f"[CRAG] RETRIEVE — Got {len(doc_texts)} documents.")
