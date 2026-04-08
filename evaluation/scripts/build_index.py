@@ -14,7 +14,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 def build_index():
     data_path = "data/processed/benchmark_dataset.jsonl"
-    persist_dir = "data/corpus/chroma_db"
+    persist_dir = "data/corpus/chroma_db_bge_small"
     
     if not os.path.exists(data_path):
         logging.error(f"Dataset not found at {data_path}. Run data_loader.py first.")

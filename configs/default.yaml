@@ -20,8 +20,8 @@ dataset_limits:
   
 # Vector Store
 vector_store:
-  persist_directory: "data/corpus/chroma_db"
-  embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+  persist_directory: "data/corpus/chroma_db_bge_small"
+  embedding_model: "BAAI/bge-small-en-v1.5"
   top_k: 10
 
 # Output Options

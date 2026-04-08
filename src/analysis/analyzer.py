@@ -274,11 +274,23 @@ def run_full_analysis(results_dir: str) -> Dict:
     logger.info(f"[Analysis] STARTING FULL ANALYSIS")
     logger.info(f"[Analysis] {'='*60}")
     
+    # Read run_summary.json to get the latest config hash
+    summary_path = os.path.join(results_dir, "run_summary.json")
+    config_hash = ""
+    if os.path.exists(summary_path):
+        with open(summary_path, "r", encoding="utf-8") as f:
+            summary = json.load(f)
+            config_hash = summary.get("config_hash", "")
+
+    suffix = f"_{config_hash}" if config_hash else ""
+    naive_file = f"naive_rag_results{suffix}.jsonl"
+    crag_file = f"crag_results{suffix}.jsonl"
+
     # Load results
-    naive_results = _load_jsonl(os.path.join(results_dir, "naive_rag_results.jsonl"))
-    crag_results = _load_jsonl(os.path.join(results_dir, "crag_results.jsonl"))
+    naive_results = _load_jsonl(os.path.join(results_dir, naive_file))
+    crag_results = _load_jsonl(os.path.join(results_dir, crag_file))
     
-    logger.info(f"[Analysis] Loaded {len(naive_results)} Naive RAG + {len(crag_results)} CRAG results.")
+    logger.info(f"[Analysis] Loaded {len(naive_results)} Naive RAG + {len(crag_results)} CRAG results from hash {config_hash}.")
     
     # 1. Classify failure modes
     naive_results = classify_all_results(naive_results)
