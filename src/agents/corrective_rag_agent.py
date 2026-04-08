@@ -2,7 +2,7 @@ import time
 import os
 import sys
 import logging
-from typing import TypedDict, List
+from typing import TypedDict, List, Optional
 
 # Add project root to path
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -25,11 +25,12 @@ class CRAGState(TypedDict):
     current_query: str          # May be rewritten
     retrieved_docs: List[str]   # Raw retrieved document texts
     relevant_docs: List[str]    # Docs that passed the relevance grader
-    web_results: List[str]      # Results from web search fallback
+    web_results: List[str]      # Results from web search fallback (kept for future use)
     answer: str                 # Final generated answer
     steps: List[str]            # Execution trace
     retries: int                # Number of query-rewrite retries
     hallucination_retries: int  # Number of hallucination re-generation retries
+    top_retrieval_score: float  # Highest relevance score from the last retrieve call
 
 
 class CorrectiveRAGAgent(BaseAgent):
@@ -44,7 +45,15 @@ class CorrectiveRAGAgent(BaseAgent):
     
     MAX_REWRITE_RETRIES = 2
     MAX_HALLUCINATION_RETRIES = 1
-    MIN_RELEVANT_DOCS = 2
+    MIN_RELEVANT_DOCS = 1
+
+    # Sub-task B: if the top retrieved doc scores above this threshold (0-1),
+    # the retrieval is highly confident and we skip the expensive grading step.
+    HIGH_CONFIDENCE_THRESHOLD = 0.80
+
+    # Sub-task C: cross-encoder relevance scores are raw logits; anything above
+    # this value is treated as relevant. 0.0 is a safe default for ms-marco models.
+    CROSS_ENCODER_THRESHOLD = 0.0
     
     def __init__(self, vector_store: VectorStoreWrapper, model_name: str = "gpt-4o-mini", temperature: float = 0.0, tavily_api_key: str = None):
         self.vector_store = vector_store
@@ -56,6 +65,18 @@ class CorrectiveRAGAgent(BaseAgent):
         self.generator_prompt = self._load_prompt("crag_generator.txt")
         self.rewriter_prompt = self._load_prompt("crag_rewriter.txt")
         self.hallucination_prompt = self._load_prompt("hallucination_check.txt")
+
+        # Sub-task C: load a local cross-encoder re-ranker to replace LLM-based grading.
+        # Falls back silently to the LLM grader if sentence-transformers is missing.
+        try:
+            from sentence_transformers import CrossEncoder
+            self.cross_encoder: Optional[CrossEncoder] = CrossEncoder(
+                "cross-encoder/ms-marco-MiniLM-L-6-v2"
+            )
+            logger.info("[CRAG] CrossEncoder re-ranker loaded: ms-marco-MiniLM-L-6-v2")
+        except Exception as e:
+            self.cross_encoder = None
+            logger.warning(f"[CRAG] CrossEncoder unavailable ({e}). Falling back to LLM grader.")
         
         # Build the LangGraph state machine
         self.graph = self._build_graph()
@@ -84,38 +105,108 @@ class CorrectiveRAGAgent(BaseAgent):
     # 2. Define each node in the graph
     # -----------------------------------------------------------------------
     def _retrieve(self, state: CRAGState) -> CRAGState:
-        """Node 1: Retrieve top-10 documents from ChromaDB."""
+        """Node 1: Retrieve top-10 documents from ChromaDB with relevance scores.
+
+        Sub-task B: if the top document's relevance score exceeds HIGH_CONFIDENCE_THRESHOLD,
+        we trust the retrieval and populate relevant_docs immediately, allowing
+        _grade_documents to skip its expensive grading loop entirely.
+        """
         query = state["current_query"]
         logger.info(f"[CRAG] RETRIEVE — Searching ChromaDB for: '{query}'")
-        
-        # INCREASED top_k to 10 to match new indexing strategy
-        docs = self.vector_store.retrieve(query, top_k=10)
-        doc_texts = [doc.page_content for doc in docs]
-        
-        logger.info(f"[CRAG] RETRIEVE — Got {len(doc_texts)} documents.")
+
+        # Reset relevant_docs so stale data from a previous rewrite loop is cleared
+        state["relevant_docs"] = []
+
+        docs_with_scores = self.vector_store.retrieve_with_scores(query, top_k=10)
+
+        if not docs_with_scores:
+            state["retrieved_docs"] = []
+            state["top_retrieval_score"] = 0.0
+            state["steps"].append("retrieve(no_results)")
+            logger.info("[CRAG] RETRIEVE — ChromaDB returned no documents.")
+            return state
+
+        top_score = docs_with_scores[0][1]
+        doc_texts = [doc.page_content for doc, _ in docs_with_scores]
+
         state["retrieved_docs"] = doc_texts
-        state["steps"].append("retrieve")
+        state["top_retrieval_score"] = top_score
+
+        logger.info(f"[CRAG] RETRIEVE — Got {len(doc_texts)} docs. Top similarity score: {top_score:.3f}")
+
+        # Sub-task B: high-confidence skip — bypass the grading node entirely
+        if top_score >= self.HIGH_CONFIDENCE_THRESHOLD:
+            # Keep top 5 docs (already sorted by similarity, best first)
+            state["relevant_docs"] = doc_texts[:5]
+            state["steps"].append(f"retrieve(high_conf={top_score:.2f}_grade_skipped)")
+            logger.info(
+                f"[CRAG] RETRIEVE — High confidence hit (score={top_score:.3f} >= {self.HIGH_CONFIDENCE_THRESHOLD}). "
+                f"Grading bypassed. Using top {len(state['relevant_docs'])} docs directly."
+            )
+        else:
+            state["steps"].append(f"retrieve(top_score={top_score:.2f})")
+
         return state
     
     def _grade_documents(self, state: CRAGState) -> CRAGState:
-        """Node 2: Grade each retrieved document as relevant or irrelevant."""
-        logger.info(f"[CRAG] GRADE — Grading {len(state['retrieved_docs'])} documents...")
-        
-        relevant = []
-        chain = self.grader_prompt | self.llm
-        
-        for i, doc in enumerate(state["retrieved_docs"]):
-            response = chain.invoke({"document": doc, "question": state["question"]})
-            self._accumulate_tokens(response)
-            grade = response.content.strip().lower()
-            is_relevant = grade == "yes"
-            logger.info(f"[CRAG] GRADE — Doc {i+1}: {'✅ Relevant' if is_relevant else '❌ Irrelevant'}")
-            if is_relevant:
-                relevant.append(doc)
-        
+        """Node 2: Re-rank retrieved documents and keep the most relevant ones.
+
+        Sub-task B: if _retrieve already populated relevant_docs via the high-confidence
+        skip, this node exits immediately — zero extra cost.
+
+        Sub-task C: uses a local CrossEncoder (ms-marco-MiniLM-L-6-v2) for re-ranking
+        instead of calling the LLM 10 times per query. The LLM grader is kept as a
+        fallback in case the CrossEncoder is unavailable.
+        """
+        # High-confidence skip — relevant_docs already populated by _retrieve
+        if state["relevant_docs"]:
+            logger.info(
+                f"[CRAG] GRADE — Skipped (high-confidence retrieve already provided "
+                f"{len(state['relevant_docs'])} relevant docs)."
+            )
+            state["steps"].append(f"grade(skipped_{len(state['relevant_docs'])}_relevant)")
+            return state
+
+        docs = state["retrieved_docs"]
+        question = state["question"]
+        logger.info(f"[CRAG] GRADE — Evaluating {len(docs)} documents for: '{question[:60]}...'")
+
+        if self.cross_encoder and docs:
+            # ── Sub-task C: CrossEncoder re-ranking (local, free, fast) ──────────
+            pairs = [(question, doc) for doc in docs]
+            scores = self.cross_encoder.predict(pairs)          # raw logits, list[float]
+
+            scored = sorted(zip(scores, docs), reverse=True)   # best scores first
+            relevant = [
+                doc for score, doc in scored
+                if score >= self.CROSS_ENCODER_THRESHOLD
+            ]
+            # Always keep the top-1 doc even if below threshold (last resort)
+            if not relevant and scored:
+                relevant = [scored[0][1]]
+                logger.info("[CRAG] GRADE (CrossEncoder) — No doc above threshold; keeping best doc as fallback.")
+            else:
+                logger.info(
+                    f"[CRAG] GRADE (CrossEncoder) — {len(relevant)}/{len(docs)} docs passed "
+                    f"threshold={self.CROSS_ENCODER_THRESHOLD}. "
+                    f"Top score: {scored[0][0]:.3f}"
+                )
+        else:
+            # ── Fallback: LLM-based binary grader (original behaviour) ───────────
+            logger.info("[CRAG] GRADE (LLM fallback) — CrossEncoder unavailable, using LLM grader.")
+            relevant = []
+            chain = self.grader_prompt | self.llm
+            for i, doc in enumerate(docs):
+                response = chain.invoke({"document": doc, "question": question})
+                self._accumulate_tokens(response)
+                is_relevant = response.content.strip().lower() == "yes"
+                logger.info(f"[CRAG] GRADE — Doc {i+1}: {'✅ Relevant' if is_relevant else '❌ Irrelevant'}")
+                if is_relevant:
+                    relevant.append(doc)
+
         state["relevant_docs"] = relevant
         state["steps"].append(f"grade({len(relevant)}_relevant)")
-        logger.info(f"[CRAG] GRADE — {len(relevant)}/{len(state['retrieved_docs'])} documents deemed relevant.")
+        logger.info(f"[CRAG] GRADE — Final relevant docs: {len(relevant)}/{len(docs)}")
         return state
     
     def _rewrite_query(self, state: CRAGState) -> CRAGState:
@@ -205,8 +296,8 @@ class CorrectiveRAGAgent(BaseAgent):
             logger.info(f"[CRAG] ROUTE — Not enough docs ({relevant_count}). → REWRITE (retry {state['retries'] + 1})")
             return "rewrite"
         else:
-            logger.info(f"[CRAG] ROUTE — Rewrites exhausted. → WEB SEARCH")
-            return "web_search"
+            logger.info(f"[CRAG] ROUTE — Rewrites exhausted. → GENERATE (skip web search)")
+            return "generate"
     
     def _route_after_hallucination_check(self, state: CRAGState) -> str:
         """Decide what to do after hallucination check."""
@@ -232,7 +323,6 @@ class CorrectiveRAGAgent(BaseAgent):
         workflow.add_node("retrieve", self._retrieve)
         workflow.add_node("grade", self._grade_documents)
         workflow.add_node("rewrite", self._rewrite_query)
-        workflow.add_node("web_search", self._web_search)
         workflow.add_node("generate", self._generate)
         workflow.add_node("hallucination_check", self._hallucination_check)
         
@@ -242,14 +332,15 @@ class CorrectiveRAGAgent(BaseAgent):
         # Define edges
         workflow.add_edge("retrieve", "grade")                      # Always grade after retrieval
         
+        # After grading: enough docs → generate, else rewrite up to MAX_REWRITE_RETRIES
+        # then fall back to generate with whatever docs are available (web search disabled
+        # for closed-corpus benchmarks where live internet results hurt accuracy)
         workflow.add_conditional_edges("grade", self._route_after_grading, {
             "generate": "generate",
             "rewrite": "rewrite",
-            "web_search": "web_search"
         })
         
         workflow.add_edge("rewrite", "retrieve")                    # Rewrite loops back to retrieve
-        workflow.add_edge("web_search", "generate")                 # Web search leads to generate
         workflow.add_edge("generate", "hallucination_check")        # Always check after generating
         
         workflow.add_conditional_edges("hallucination_check", self._route_after_hallucination_check, {
@@ -280,7 +371,8 @@ class CorrectiveRAGAgent(BaseAgent):
             "answer": "",
             "steps": [],
             "retries": 0,
-            "hallucination_retries": 0
+            "hallucination_retries": 0,
+            "top_retrieval_score": 0.0
         }
         
         # Execute the graph
