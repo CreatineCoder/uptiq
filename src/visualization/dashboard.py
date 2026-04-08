@@ -131,8 +131,21 @@ def main():
     
     @st.cache_data
     def load_run_data(full_path):
-        naive = _load_jsonl(os.path.join(full_path, "naive_rag_results.jsonl"))
-        crag = _load_jsonl(os.path.join(full_path, "crag_results.jsonl"))
+        # Helper to find the latest timestamped file or default
+        def find_latest_file(base_name):
+            files = [f for f in os.listdir(full_path) if f.startswith(base_name) and f.endswith(".jsonl")]
+            if not files:
+                return os.path.join(full_path, f"{base_name}.jsonl")
+            # Sort by filename which includes timestamp (e.g. naive_rag_results_1712500000.jsonl)
+            # This works because timestamps are numeric and fixed length
+            files.sort(reverse=True)
+            return os.path.join(full_path, files[0])
+
+        naive_path = find_latest_file("naive_rag_results")
+        crag_path = find_latest_file("crag_results")
+        
+        naive = _load_jsonl(naive_path)
+        crag = _load_jsonl(crag_path)
         
         analysis = {}
         analysis_path = os.path.join(full_path, "analysis_report.json")
@@ -161,7 +174,13 @@ def main():
     
     # ── Sidebar Filters ──
     st.sidebar.header("Filters")
-    selected_dataset = st.sidebar.selectbox("Dataset", ["All", "nq", "hotpotqa"])
+    
+    # Dynamically get available datasets or fallback to known ones
+    available_datasets = ["All"] + sorted(combined_df["dataset"].dropna().unique().tolist())
+    if len(available_datasets) == 1:
+        available_datasets = ["All", "squad_v2", "hotpotqa"]
+        
+    selected_dataset = st.sidebar.selectbox("Dataset", available_datasets)
     selected_difficulty = st.sidebar.selectbox("Difficulty", ["All", "single-hop", "multi-hop"])
     selected_agent = st.sidebar.selectbox("Agent", ["Both", "naive_rag", "corrective_rag"])
     
@@ -181,18 +200,30 @@ def main():
     naive_filtered = filtered[filtered["agent_type"] == "naive_rag"]
     crag_filtered = filtered[filtered["agent_type"] == "corrective_rag"]
     
-    with col1:
-        st.metric("Naive EM", f"{naive_filtered['exact_match'].mean():.2%}" if len(naive_filtered) > 0 else "N/A")
-    with col2:
-        st.metric("CRAG EM", f"{crag_filtered['exact_match'].mean():.2%}" if len(crag_filtered) > 0 else "N/A")
-    with col3:
-        st.metric("Naive F1", f"{naive_filtered['f1'].mean():.2%}" if len(naive_filtered) > 0 else "N/A")
-    with col4:
-        st.metric("CRAG F1", f"{crag_filtered['f1'].mean():.2%}" if len(crag_filtered) > 0 else "N/A")
-    with col5:
-        st.metric("Naive Avg Latency", f"{naive_filtered['latency'].mean():.2f}s" if len(naive_filtered) > 0 else "N/A")
-    with col6:
-        st.metric("CRAG Avg Latency", f"{crag_filtered['latency'].mean():.2f}s" if len(crag_filtered) > 0 else "N/A")
+    show_naive = selected_agent in ["Both", "naive_rag"]
+    show_crag = selected_agent in ["Both", "corrective_rag"]
+    
+    # Calculate how many display columns we need based on selections
+    num_cols = (3 if show_naive else 0) + (3 if show_crag else 0)
+    cols = st.columns(num_cols)
+    
+    col_idx = 0
+    if show_naive:
+        with cols[col_idx]:
+            st.metric("Naive Exact Match (EM)", f"{naive_filtered['exact_match'].mean():.2%}" if len(naive_filtered) > 0 else "0.00%")
+        with cols[col_idx+1]:
+            st.metric("Naive F1 Score", f"{naive_filtered['f1'].mean():.2%}" if len(naive_filtered) > 0 else "0.00%")
+        with cols[col_idx+2]:
+            st.metric("Naive Avg Latency", f"{naive_filtered['latency'].mean():.2f}s" if len(naive_filtered) > 0 else "0.00s")
+        col_idx += 3
+        
+    if show_crag:
+        with cols[col_idx]:
+            st.metric("CRAG Exact Match (EM)", f"{crag_filtered['exact_match'].mean():.2%}" if len(crag_filtered) > 0 else "0.00%")
+        with cols[col_idx+1]:
+            st.metric("CRAG F1 Score", f"{crag_filtered['f1'].mean():.2%}" if len(crag_filtered) > 0 else "0.00%")
+        with cols[col_idx+2]:
+            st.metric("CRAG Avg Latency", f"{crag_filtered['latency'].mean():.2f}s" if len(crag_filtered) > 0 else "0.00s")
     
     st.markdown("---")
     

@@ -6,6 +6,7 @@ Supports resume: if the pipeline crashes, it picks up where it left off.
 """
 import os
 import json
+import time
 import logging
 from typing import Dict, Set, List
 
@@ -13,21 +14,23 @@ logger = logging.getLogger(__name__)
 
 
 class ResultCollector:
-    """Manages saving benchmark results with checkpoint/resume support."""
+    """Manages saving benchmark results with unique filenames to prevent overwriting."""
     
     def __init__(self, results_dir: str):
         self.results_dir = results_dir
         os.makedirs(results_dir, exist_ok=True)
         
-        self.naive_path = os.path.join(results_dir, "naive_rag_results.jsonl")
-        self.crag_path = os.path.join(results_dir, "crag_results.jsonl")
+        # Unique timestamp for each session (prevent overwrite)
+        self.timestamp = int(time.time())
+        self.naive_path = os.path.join(results_dir, f"naive_rag_results_{self.timestamp}.jsonl")
+        self.crag_path = os.path.join(results_dir, f"crag_results_{self.timestamp}.jsonl")
         
-        # Load already-processed query IDs for resume
-        self.processed_naive = self._load_processed_ids(self.naive_path)
-        self.processed_crag = self._load_processed_ids(self.crag_path)
+        # For new unique runs, processed sets start empty
+        self.processed_naive = set()
+        self.processed_crag = set()
         
-        logger.info(f"[ResultCollector] Loaded {len(self.processed_naive)} existing Naive RAG results.")
-        logger.info(f"[ResultCollector] Loaded {len(self.processed_crag)} existing CRAG results.")
+        logger.info(f"[ResultCollector] Created target file: {self.naive_path}")
+        logger.info(f"[ResultCollector] Created target file: {self.crag_path}")
     
     def _load_processed_ids(self, filepath: str) -> Set[str]:
         """Read an existing results file and return the set of already-processed query IDs."""

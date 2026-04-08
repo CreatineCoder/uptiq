@@ -13,12 +13,21 @@ experiment:
 dataset:
   path: "data/processed/benchmark_dataset.jsonl"
   total_queries: 1500         # Set lower for pilot runs (e.g., 50)
+
+dataset_limits:
+  squad_v2: 20
+  hotpotqa: 10
   
 # Vector Store
 vector_store:
   persist_directory: "data/corpus/chroma_db"
   embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
-  top_k: 5
+  top_k: 10
+
+# Output Options
+output:
+  results_dir: "data/results"
+  reports_dir: "reports"
 
 # Agent Configuration
 agents:
@@ -30,9 +39,9 @@ agents:
     enabled: true
     model: "gpt-4o-mini"
     temperature: 0.0
-    max_rewrite_retries: 2
+    max_rewrite_retries: 1
     max_hallucination_retries: 1
-    min_relevant_docs: 2
+    min_relevant_docs: 1
     tavily_api_key: "${TAVILY_API_KEY}"
 
 # Evaluation

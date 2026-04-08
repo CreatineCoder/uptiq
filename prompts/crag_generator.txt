@@ -4,7 +4,7 @@ Rules:
 1. Base your answer strictly on the provided context.
 2. Do NOT use any external knowledge.
 3. If the context does not contain enough information, say "UNANSWERABLE".
-4. Be concise and direct.
+4. Provide a very short, direct answer in as few words as possible (e.g., a single word, phrase, or name) without writing full sentences. Give SQuAD-style fragmented answers.
 
 Context:
 {context}

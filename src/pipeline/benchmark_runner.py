@@ -87,19 +87,40 @@ class BenchmarkRunner:
             logger.info("[Runner] Corrective RAG Agent initialized.")
     
     def _load_dataset(self) -> List[Dict]:
-        """Load the benchmark dataset from JSONL."""
+        """Load the benchmark dataset from JSONL, optionally filtering by dataset type."""
         dataset_path = self.config["dataset"]["path"]
-        dataset_filter = self.config["dataset"].get("filter_dataset")
+        dataset_filter = self.config.get("dataset_filter") # Check if filter passed to runner
+        dataset_limits = self.config.get("dataset_limits") # E.g., {"squad_v2": 20, "hotpotqa": 10}
+        
         data = []
+        counts = {}
+        
         with open(dataset_path, "r", encoding="utf-8") as f:
             for line in f:
                 item = json.loads(line.strip())
-                if dataset_filter and item.get("dataset") != dataset_filter:
-                    continue
-                data.append(item)
+                ds = item.get("dataset")
+                
+                if dataset_limits:
+                    if ds in dataset_limits:
+                        counts[ds] = counts.get(ds, 0)
+                        if counts[ds] < dataset_limits[ds]:
+                            data.append(item)
+                            counts[ds] += 1
+                else:
+                    if dataset_filter and ds != dataset_filter:
+                        continue
+                    data.append(item)
         
-        # Apply pilot limit
-        total = self.pilot if self.pilot else self.config["dataset"].get("total_queries", len(data))
+        # If dataset_limits is used, override pilot and return exactly the limited subsets
+        if dataset_limits:
+            logger.info(f"[Runner] Loaded {len(data)} queries based on limits: {counts}")
+            return data
+            
+        # If pilot is set, slice AFTER filtering to get exactly n of the filtered set
+        if self.pilot:
+            return data[:self.pilot]
+        
+        total = self.config["dataset"].get("total_queries", len(data))
         data = data[:total]
         
         logger.info(f"[Runner] Loaded {len(data)} queries from {dataset_path} (Filter: {dataset_filter})")
