@@ -149,8 +149,12 @@ def main():
         
         analysis = {}
         analysis_path = os.path.join(full_path, "analysis_report.json")
+        # Try to find the latest valid analysis report 
         if os.path.exists(analysis_path):
             with open(analysis_path, "r") as f:
+                analysis = json.load(f)
+        elif os.path.exists(os.path.join(RESULTS_DIR, "analysis_report.json")):
+            with open(os.path.join(RESULTS_DIR, "analysis_report.json"), "r") as f:
                 analysis = json.load(f)
         
         summary = {}
@@ -181,49 +185,57 @@ def main():
         available_datasets = ["All", "squad_v2", "hotpotqa"]
         
     selected_dataset = st.sidebar.selectbox("Dataset", available_datasets)
-    selected_difficulty = st.sidebar.selectbox("Difficulty", ["All", "single-hop", "multi-hop"])
     selected_agent = st.sidebar.selectbox("Agent", ["Both", "naive_rag", "corrective_rag"])
     
     # Apply filters
     filtered = combined_df.copy()
     if selected_dataset != "All":
         filtered = filtered[filtered["dataset"] == selected_dataset]
-    if selected_difficulty != "All":
-        filtered = filtered[filtered["difficulty"] == selected_difficulty]
     if selected_agent != "Both":
         filtered = filtered[filtered["agent_type"] == selected_agent]
     
     # ── KPI Row ──
     st.header("Key Metrics")
-    col1, col2, col3, col4, col5, col6 = st.columns(6)
     
     naive_filtered = filtered[filtered["agent_type"] == "naive_rag"]
     crag_filtered = filtered[filtered["agent_type"] == "corrective_rag"]
     
+    n_em = naive_filtered['exact_match'].mean() if len(naive_filtered) > 0 else 0
+    n_f1 = naive_filtered['f1'].mean() if len(naive_filtered) > 0 else 0
+    n_lat = naive_filtered['latency'].mean() if len(naive_filtered) > 0 else 0
+    
+    c_em = crag_filtered['exact_match'].mean() if len(crag_filtered) > 0 else 0
+    c_f1 = crag_filtered['f1'].mean() if len(crag_filtered) > 0 else 0
+    c_lat = crag_filtered['latency'].mean() if len(crag_filtered) > 0 else 0
+    
+    def pct_change(val, baseline, baseline_name):
+        if baseline == 0: return None
+        return f"{(val - baseline) / baseline * 100:+.2f}% vs {baseline_name}"
+        
     show_naive = selected_agent in ["Both", "naive_rag"]
     show_crag = selected_agent in ["Both", "corrective_rag"]
     
     # Calculate how many display columns we need based on selections
     num_cols = (3 if show_naive else 0) + (3 if show_crag else 0)
-    cols = st.columns(num_cols)
+    cols = st.columns(max(num_cols, 1)) # Ensure at least 1 column for safety
     
     col_idx = 0
     if show_naive:
         with cols[col_idx]:
-            st.metric("Naive Exact Match (EM)", f"{naive_filtered['exact_match'].mean():.2%}" if len(naive_filtered) > 0 else "0.00%")
+            st.metric("Naive Exact Match (EM)", f"{n_em:.2%}", delta=pct_change(n_em, c_em, "CRAG") if c_em > 0 and show_crag else None)
         with cols[col_idx+1]:
-            st.metric("Naive F1 Score", f"{naive_filtered['f1'].mean():.2%}" if len(naive_filtered) > 0 else "0.00%")
+            st.metric("Naive F1 Score", f"{n_f1:.2%}", delta=pct_change(n_f1, c_f1, "CRAG") if c_f1 > 0 and show_crag else None)
         with cols[col_idx+2]:
-            st.metric("Naive Avg Latency", f"{naive_filtered['latency'].mean():.2f}s" if len(naive_filtered) > 0 else "0.00s")
+            st.metric("Naive Avg Latency", f"{n_lat:.2f}s", delta=pct_change(n_lat, c_lat, "CRAG") if c_lat > 0 and show_crag else None, delta_color="inverse")
         col_idx += 3
         
     if show_crag:
         with cols[col_idx]:
-            st.metric("CRAG Exact Match (EM)", f"{crag_filtered['exact_match'].mean():.2%}" if len(crag_filtered) > 0 else "0.00%")
+            st.metric("CRAG Exact Match (EM)", f"{c_em:.2%}", delta=pct_change(c_em, n_em, "Naive RAG") if n_em > 0 and show_naive else None)
         with cols[col_idx+1]:
-            st.metric("CRAG F1 Score", f"{crag_filtered['f1'].mean():.2%}" if len(crag_filtered) > 0 else "0.00%")
+            st.metric("CRAG F1 Score", f"{c_f1:.2%}", delta=pct_change(c_f1, n_f1, "Naive RAG") if n_f1 > 0 and show_naive else None)
         with cols[col_idx+2]:
-            st.metric("CRAG Avg Latency", f"{crag_filtered['latency'].mean():.2f}s" if len(crag_filtered) > 0 else "0.00s")
+            st.metric("CRAG Avg Latency", f"{c_lat:.2f}s", delta=pct_change(c_lat, n_lat, "Naive RAG") if n_lat > 0 and show_naive else None, delta_color="inverse")
     
     st.markdown("---")
     
@@ -277,29 +289,31 @@ def main():
         common_ids = sorted(naive_ids & crag_ids)
         
         if common_ids:
-            selected_id = st.selectbox("Select Query ID", common_ids)
+            selected_ids = st.multiselect("Select Query IDs (up to 5 by default)", common_ids, default=common_ids[:5])
             
-            n_row = naive_df[naive_df["query_id"] == selected_id].iloc[0] if selected_id in naive_ids else None
-            c_row = crag_df[crag_df["query_id"] == selected_id].iloc[0] if selected_id in crag_ids else None
-            
-            if n_row is not None:
-                st.markdown(f"**Question:** {n_row['question']}")
-                st.markdown(f"**Gold Answer:** `{n_row['gold_answer']}`")
-                st.markdown(f"**Dataset:** {n_row['dataset']} | **Difficulty:** {n_row['difficulty']}")
-                st.markdown("---")
+            for selected_id in selected_ids:
+                n_row = naive_df[naive_df["query_id"] == selected_id].iloc[0] if selected_id in naive_ids else None
+                c_row = crag_df[crag_df["query_id"] == selected_id].iloc[0] if selected_id in crag_ids else None
                 
-                col_n, col_c = st.columns(2)
-                with col_n:
-                    st.markdown("### Naive RAG")
-                    st.markdown(f"**Answer:** {n_row['predicted_answer']}")
-                    st.markdown(f"EM: `{n_row['exact_match']}` | F1: `{n_row['f1']:.3f}` | Latency: `{n_row['latency']:.2f}s`")
-                
-                with col_c:
-                    if c_row is not None:
-                        st.markdown("### Corrective RAG")
-                        st.markdown(f"**Answer:** {c_row['predicted_answer']}")
-                        st.markdown(f"EM: `{c_row['exact_match']}` | F1: `{c_row['f1']:.3f}` | Latency: `{c_row['latency']:.2f}s`")
-                        st.markdown(f"**Steps:** {c_row['steps']}")
+                if n_row is not None:
+                    st.markdown(f"**Question ID:** {selected_id}")
+                    st.markdown(f"**Question:** {n_row['question']}")
+                    st.markdown(f"**Gold Answer:** `{n_row['gold_answer']}`")
+                    st.markdown(f"**Dataset:** {n_row['dataset']}")
+                    
+                    col_n, col_c = st.columns(2)
+                    with col_n:
+                        st.markdown("### Naive RAG")
+                        st.markdown(f"**Answer:** {n_row['predicted_answer']}")
+                        st.markdown(f"EM: `{n_row['exact_match']}` | F1: `{n_row['f1']:.3f}` | Latency: `{n_row['latency']:.2f}s`")
+                    
+                    with col_c:
+                        if c_row is not None:
+                            st.markdown("### Corrective RAG")
+                            st.markdown(f"**Answer:** {c_row['predicted_answer']}")
+                            st.markdown(f"EM: `{c_row['exact_match']}` | F1: `{c_row['f1']:.3f}` | Latency: `{c_row['latency']:.2f}s`")
+                            st.markdown(f"**Steps:** {c_row['steps']}")
+                    st.markdown("---")
     
     with tab3:
         st.subheader("Failure Mode Analysis")

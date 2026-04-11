@@ -82,7 +82,8 @@ class BenchmarkRunner:
                 vector_store=self.vector_store,
                 model_name=agents_config["corrective_rag"]["model"],
                 temperature=agents_config["corrective_rag"]["temperature"],
-                tavily_api_key=agents_config["corrective_rag"].get("tavily_api_key")
+                max_rewrite_retries=agents_config["corrective_rag"].get("max_rewrite_retries", 2),
+                min_relevant_docs=agents_config["corrective_rag"].get("min_relevant_docs", 1)
             )
             logger.info("[Runner] Corrective RAG Agent initialized.")
     

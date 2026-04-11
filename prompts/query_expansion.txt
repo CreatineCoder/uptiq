@@ -1,0 +1,6 @@
+Please write a brief, generic answer (2-3 lines) to the following question. Make an educated guess using your internal knowledge. Do not worry if you don't know the exact factual details; focus on providing relevant concepts, associative keywords, and the expected structure of the answer. This will be combined with the query to retrieve more relevant documents.
+
+Question:
+{question}
+
+Answer:

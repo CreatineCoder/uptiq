@@ -25,11 +25,9 @@ class CRAGState(TypedDict):
     current_query: str          # May be rewritten
     retrieved_docs: List[str]   # Raw retrieved document texts
     relevant_docs: List[str]    # Docs that passed the relevance grader
-    web_results: List[str]      # Results from web search fallback (kept for future use)
     answer: str                 # Final generated answer
     steps: List[str]            # Execution trace
     retries: int                # Number of query-rewrite retries
-    hallucination_retries: int  # Number of hallucination re-generation retries
     top_retrieval_score: float  # Highest relevance score from the last retrieve call
 
 
@@ -38,33 +36,36 @@ class CorrectiveRAGAgent(BaseAgent):
     A self-correcting RAG agent built with LangGraph.
     
     Flow:
-        RETRIEVE → GRADE → (GENERATE | REWRITE → RETRIEVE | WEB SEARCH)
-                                        ↓
-                              HALLUCINATION CHECK → (DONE | RE-GENERATE)
+        EXPAND → RETRIEVE → GRADE → (GENERATE | REWRITE → RETRIEVE)
     """
-    
-    MAX_REWRITE_RETRIES = 2
-    MAX_HALLUCINATION_RETRIES = 1
-    MIN_RELEVANT_DOCS = 1
 
     # Sub-task B: if the top retrieved doc scores above this threshold (0-1),
     # the retrieval is highly confident and we skip the expensive grading step.
     HIGH_CONFIDENCE_THRESHOLD = 0.80
 
     # Sub-task C: cross-encoder relevance scores are raw logits; anything above
-    # this value is treated as relevant. 0.0 is a safe default for ms-marco models.
-    CROSS_ENCODER_THRESHOLD = 0.0
+    # this value is treated as relevant. -3.0 is a lenient default for ms-marco models 
+    # to allow partial multi-hop contexts to pass.
+    CROSS_ENCODER_THRESHOLD = -3.0
     
-    def __init__(self, vector_store: VectorStoreWrapper, model_name: str = "gpt-4o-mini", temperature: float = 0.0, tavily_api_key: str = None):
+    def __init__(self, 
+                 vector_store: VectorStoreWrapper, 
+                 model_name: str = "gpt-4o-mini", 
+                 temperature: float = 0.0, 
+                 max_rewrite_retries: int = 2,
+                 min_relevant_docs: int = 1):
         self.vector_store = vector_store
         self.llm = ChatOpenAI(model=model_name, temperature=temperature)
-        self.tavily_api_key = tavily_api_key or os.getenv("TAVILY_API_KEY")
+        
+        # Configuration injected from YAML
+        self.max_rewrite_retries = max_rewrite_retries
+        self.min_relevant_docs = min_relevant_docs
         
         # Load all prompt templates
+        self.expander_prompt = self._load_prompt("query_expansion.txt")
         self.grader_prompt = self._load_prompt("crag_grader.txt")
         self.generator_prompt = self._load_prompt("crag_generator.txt")
         self.rewriter_prompt = self._load_prompt("crag_rewriter.txt")
-        self.hallucination_prompt = self._load_prompt("hallucination_check.txt")
 
         # Sub-task C: load a local cross-encoder re-ranker to replace LLM-based grading.
         # Falls back silently to the LLM grader if sentence-transformers is missing.
@@ -104,6 +105,23 @@ class CorrectiveRAGAgent(BaseAgent):
     # -----------------------------------------------------------------------
     # 2. Define each node in the graph
     # -----------------------------------------------------------------------
+    def _expand_query(self, state: CRAGState) -> CRAGState:
+        """Node 0: Expand the initial query using a generic hypothetical answer (HyDE approach)."""
+        logger.info(f"[CRAG] EXPAND — Generating hypothetical answer for: '{state['question']}'")
+        
+        chain = self.expander_prompt | self.llm
+        response = chain.invoke({"question": state["question"]})
+        self._accumulate_tokens(response)
+        
+        hypothetical_answer = response.content.strip()
+        expanded_query = f"{state['question']}\n{hypothetical_answer}"
+        
+        logger.info(f"[CRAG] EXPAND — Expanded query length: {len(expanded_query)} chars")
+        
+        state["current_query"] = expanded_query
+        state["steps"].append("expand")
+        return state
+
     def _retrieve(self, state: CRAGState) -> CRAGState:
         """Node 1: Retrieve top-10 documents from ChromaDB with relevance scores.
 
@@ -117,7 +135,8 @@ class CorrectiveRAGAgent(BaseAgent):
         # Reset relevant_docs so stale data from a previous rewrite loop is cleared
         state["relevant_docs"] = []
 
-        docs_with_scores = self.vector_store.retrieve_with_scores(query, top_k=10)
+        # Retrieve top 15 chunks based on the expanded query
+        docs_with_scores = self.vector_store.retrieve_with_scores(query, top_k=20)
 
         if not docs_with_scores:
             state["retrieved_docs"] = []
@@ -177,20 +196,14 @@ class CorrectiveRAGAgent(BaseAgent):
             scores = self.cross_encoder.predict(pairs)          # raw logits, list[float]
 
             scored = sorted(zip(scores, docs), reverse=True)   # best scores first
-            relevant = [
-                doc for score, doc in scored
-                if score >= self.CROSS_ENCODER_THRESHOLD
-            ]
-            # Always keep the top-1 doc even if below threshold (last resort)
-            if not relevant and scored:
-                relevant = [scored[0][1]]
-                logger.info("[CRAG] GRADE (CrossEncoder) — No doc above threshold; keeping best doc as fallback.")
-            else:
-                logger.info(
-                    f"[CRAG] GRADE (CrossEncoder) — {len(relevant)}/{len(docs)} docs passed "
-                    f"threshold={self.CROSS_ENCODER_THRESHOLD}. "
-                    f"Top score: {scored[0][0]:.3f}"
-                )
+            # Keep top 10 from the 15 retrieved
+            top_k = min(10, len(scored))
+            relevant = [doc for _, doc in scored[:top_k]]
+            
+            logger.info(
+                f"[CRAG] GRADE (CrossEncoder) — Kept top {top_k}/{len(docs)} docs. "
+                f"Top score: {scored[0][0]:.3f}"
+            )
         else:
             # ── Fallback: LLM-based binary grader (original behaviour) ───────────
             logger.info("[CRAG] GRADE (LLM fallback) — CrossEncoder unavailable, using LLM grader.")
@@ -225,31 +238,8 @@ class CorrectiveRAGAgent(BaseAgent):
         state["steps"].append("rewrite")
         return state
     
-    def _web_search(self, state: CRAGState) -> CRAGState:
-        """Node 4: Fallback to Tavily web search."""
-        logger.info(f"[CRAG] WEB SEARCH — Searching the web for: '{state['current_query']}'")
-        
-        web_results = []
-        if self.tavily_api_key:
-            try:
-                from tavily import TavilyClient
-                client = TavilyClient(api_key=self.tavily_api_key)
-                results = client.search(query=state["current_query"], max_results=3)
-                web_results = [r["content"] for r in results.get("results", [])]
-                logger.info(f"[CRAG] WEB SEARCH — Got {len(web_results)} web results.")
-            except Exception as e:
-                logger.warning(f"[CRAG] WEB SEARCH — Failed: {e}")
-        else:
-            logger.warning("[CRAG] WEB SEARCH — No TAVILY_API_KEY set. Skipping web search.")
-        
-        state["web_results"] = web_results
-        # Add web results to relevant docs so the generator can use them
-        state["relevant_docs"].extend(web_results)
-        state["steps"].append("web_search")
-        return state
-    
     def _generate(self, state: CRAGState) -> CRAGState:
-        """Node 5: Generate an answer from the relevant context."""
+        """Node 4: Generate an answer from the relevant context."""
         context = "\n\n".join(state["relevant_docs"])
         logger.info(f"[CRAG] GENERATE — Generating answer from {len(state['relevant_docs'])} context pieces...")
         
@@ -261,26 +251,6 @@ class CorrectiveRAGAgent(BaseAgent):
         state["steps"].append("generate")
         logger.info(f"[CRAG] GENERATE — Answer: '{state['answer'][:100]}...'")
         return state
-    
-    def _hallucination_check(self, state: CRAGState) -> CRAGState:
-        """Node 6: Verify the answer is grounded in context."""
-        logger.info(f"[CRAG] HALLUCINATION CHECK — Verifying answer is grounded...")
-        
-        context = "\n\n".join(state["relevant_docs"])
-        chain = self.hallucination_prompt | self.llm
-        response = chain.invoke({"context": context, "answer": state["answer"]})
-        self._accumulate_tokens(response)
-        
-        is_grounded = response.content.strip().lower() == "yes"
-        logger.info(f"[CRAG] HALLUCINATION CHECK — Grounded: {'✅ Yes' if is_grounded else '❌ No'}")
-        
-        if is_grounded:
-            state["steps"].append("hallucination_check(passed)")
-        else:
-            state["steps"].append("hallucination_check(failed)")
-            state["hallucination_retries"] += 1
-        
-        return state
 
     # -----------------------------------------------------------------------
     # 3. Define routing logic (conditional edges)
@@ -289,29 +259,15 @@ class CorrectiveRAGAgent(BaseAgent):
         """Decide what to do after grading documents."""
         relevant_count = len(state["relevant_docs"])
         
-        if relevant_count >= self.MIN_RELEVANT_DOCS:
+        if relevant_count >= self.min_relevant_docs:
             logger.info(f"[CRAG] ROUTE — Enough relevant docs ({relevant_count}). → GENERATE")
             return "generate"
-        elif state["retries"] < self.MAX_REWRITE_RETRIES:
+        elif state["retries"] < self.max_rewrite_retries:
             logger.info(f"[CRAG] ROUTE — Not enough docs ({relevant_count}). → REWRITE (retry {state['retries'] + 1})")
             return "rewrite"
         else:
             logger.info(f"[CRAG] ROUTE — Rewrites exhausted. → GENERATE (skip web search)")
             return "generate"
-    
-    def _route_after_hallucination_check(self, state: CRAGState) -> str:
-        """Decide what to do after hallucination check."""
-        last_step = state["steps"][-1]
-        
-        if "passed" in last_step:
-            logger.info(f"[CRAG] ROUTE — Hallucination check passed. → DONE")
-            return "done"
-        elif state["hallucination_retries"] <= self.MAX_HALLUCINATION_RETRIES:
-            logger.info(f"[CRAG] ROUTE — Hallucination detected. → RE-GENERATE")
-            return "regenerate"
-        else:
-            logger.info(f"[CRAG] ROUTE — Max hallucination retries hit. → DONE (with warning)")
-            return "done"
 
     # -----------------------------------------------------------------------
     # 4. Build the LangGraph state machine
@@ -320,19 +276,20 @@ class CorrectiveRAGAgent(BaseAgent):
         workflow = StateGraph(CRAGState)
         
         # Add nodes
+        workflow.add_node("expand", self._expand_query)
         workflow.add_node("retrieve", self._retrieve)
         workflow.add_node("grade", self._grade_documents)
         workflow.add_node("rewrite", self._rewrite_query)
         workflow.add_node("generate", self._generate)
-        workflow.add_node("hallucination_check", self._hallucination_check)
         
         # Set entry point
-        workflow.set_entry_point("retrieve")
+        workflow.set_entry_point("expand")
         
         # Define edges
+        workflow.add_edge("expand", "retrieve")                     # Expand and then retrieve
         workflow.add_edge("retrieve", "grade")                      # Always grade after retrieval
         
-        # After grading: enough docs → generate, else rewrite up to MAX_REWRITE_RETRIES
+        # After grading: enough docs → generate, else rewrite up to max_rewrite_retries
         # then fall back to generate with whatever docs are available (web search disabled
         # for closed-corpus benchmarks where live internet results hurt accuracy)
         workflow.add_conditional_edges("grade", self._route_after_grading, {
@@ -341,12 +298,7 @@ class CorrectiveRAGAgent(BaseAgent):
         })
         
         workflow.add_edge("rewrite", "retrieve")                    # Rewrite loops back to retrieve
-        workflow.add_edge("generate", "hallucination_check")        # Always check after generating
-        
-        workflow.add_conditional_edges("hallucination_check", self._route_after_hallucination_check, {
-            "done": END,
-            "regenerate": "generate"
-        })
+        workflow.add_edge("generate", END)                          # Generation is the last step
         
         return workflow.compile()
 
@@ -367,11 +319,9 @@ class CorrectiveRAGAgent(BaseAgent):
             "current_query": query,
             "retrieved_docs": [],
             "relevant_docs": [],
-            "web_results": [],
             "answer": "",
             "steps": [],
             "retries": 0,
-            "hallucination_retries": 0,
             "top_retrieval_score": 0.0
         }
         
@@ -391,8 +341,6 @@ class CorrectiveRAGAgent(BaseAgent):
             agent_type="corrective_rag",
             metadata={
                 "rewrites": final_state["retries"],
-                "hallucination_retries": final_state["hallucination_retries"],
-                "web_results_used": len(final_state["web_results"]),
                 "original_query": query,
                 "final_query": final_state["current_query"]
             }

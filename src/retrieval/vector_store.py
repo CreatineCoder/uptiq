@@ -2,7 +2,7 @@ import os
 import logging
 from typing import List, Dict, Any, Tuple
 from langchain_community.vectorstores import Chroma
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.embeddings import HuggingFaceBgeEmbeddings
 from langchain_core.documents import Document
 
 logger = logging.getLogger(__name__)
@@ -12,7 +12,11 @@ class VectorStoreWrapper:
     
     def __init__(self, persist_directory: str, embedding_model_name: str = "BAAI/bge-small-en-v1.5"):
         self.persist_directory = persist_directory
-        self.embeddings = HuggingFaceEmbeddings(model_name=embedding_model_name)
+        self.embeddings = HuggingFaceBgeEmbeddings(
+            model_name=embedding_model_name,
+            model_kwargs={'device': 'cpu'},
+            encode_kwargs={'normalize_embeddings': True}
+        )
         
         # Use a new collection name for the BGE model to prevent dimension mismatch
         self.vector_store = Chroma(
@@ -46,14 +50,21 @@ class VectorStoreWrapper:
     def retrieve(self, query: str, top_k: int = 5) -> List[Document]:
         """Hybrid retrieval for standard (Naive RAG) usage."""
         if self.bm25_retriever:
-            from langchain.retrievers import EnsembleRetriever
+            dense_docs = self.vector_store.similarity_search(query, k=top_k)
+            
             self.bm25_retriever.k = top_k
-            dense = self.vector_store.as_retriever(search_kwargs={"k": top_k})
-            ensemble = EnsembleRetriever(
-                retrievers=[self.bm25_retriever, dense],
-                weights=[0.3, 0.7] # 70% dense (BGE is strong), 30% BM25
-            )
-            return ensemble.invoke(query)[:top_k]
+            bm25_docs = self.bm25_retriever.invoke(query)
+            
+            # Reciprocal Rank Fusion (RRF)
+            doc_scores = {}
+            for rank, doc in enumerate(dense_docs):
+                doc_scores[doc.page_content] = doc_scores.get(doc.page_content, 0) + 1 / (60 + rank)
+            for rank, doc in enumerate(bm25_docs):
+                doc_scores[doc.page_content] = doc_scores.get(doc.page_content, 0) + 1 / (60 + rank)
+                
+            all_docs = {d.page_content: d for d in dense_docs + bm25_docs}
+            sorted_contents = sorted(doc_scores.keys(), key=lambda x: doc_scores[x], reverse=True)
+            return [all_docs[c] for c in sorted_contents[:top_k]]
             
         return self.vector_store.similarity_search(query, k=top_k)
 

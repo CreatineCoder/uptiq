@@ -282,13 +282,16 @@ def run_full_analysis(results_dir: str) -> Dict:
             summary = json.load(f)
             config_hash = summary.get("config_hash", "")
 
-    suffix = f"_{config_hash}" if config_hash else ""
-    naive_file = f"naive_rag_results{suffix}.jsonl"
-    crag_file = f"crag_results{suffix}.jsonl"
+    import glob
+    naive_files = sorted(glob.glob(os.path.join(results_dir, "naive_rag_results*.jsonl")))
+    crag_files = sorted(glob.glob(os.path.join(results_dir, "crag_results*.jsonl")))
+    
+    naive_file = naive_files[-1] if naive_files else ""
+    crag_file = crag_files[-1] if crag_files else ""
 
     # Load results
-    naive_results = _load_jsonl(os.path.join(results_dir, naive_file))
-    crag_results = _load_jsonl(os.path.join(results_dir, crag_file))
+    naive_results = _load_jsonl(naive_file) if naive_file else []
+    crag_results = _load_jsonl(crag_file) if crag_file else []
     
     logger.info(f"[Analysis] Loaded {len(naive_results)} Naive RAG + {len(crag_results)} CRAG results from hash {config_hash}.")
     

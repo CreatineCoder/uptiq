@@ -21,7 +21,8 @@ class ResultCollector:
         os.makedirs(results_dir, exist_ok=True)
         
         # Unique timestamp for each session (prevent overwrite)
-        self.timestamp = int(time.time())
+        import datetime
+        self.timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         self.naive_path = os.path.join(results_dir, f"naive_rag_results_{self.timestamp}.jsonl")
         self.crag_path = os.path.join(results_dir, f"crag_results_{self.timestamp}.jsonl")
         

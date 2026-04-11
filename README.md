@@ -209,42 +209,32 @@ class NaiveRAGAgent(BaseAgent):
 
 ### Agent B: Corrective Agentic RAG (CRAG)
 
-A **self-correcting RAG** with a retrieval quality gate, query rewriting, web search fallback, and post-generation hallucination checking. Built using **LangGraph** for stateful workflow orchestration.
+A **self-correcting RAG** with query expansion, a retrieval quality gate, and query rewriting. Built using **LangGraph** for stateful workflow orchestration. Note: The originally planned web search and hallucination checking loops were removed to decrease latency and prevent infinite retry loops that degraded performance.
 
 ```mermaid
 graph TB
-    Q[User Query] --> R1[Retrieve Top-K]
-    R1 --> G[Relevance Grader]
-    G -->|"✅ Relevant"| GEN[Generate Answer]
-    G -->|"❌ Irrelevant"| RW[Rewrite Query]
-    G -->|"⚠️ Ambiguous"| WS[Web Search Fallback]
+    Q[User Query] --> EXP[Expand Query \n via HyDE]
+    EXP --> R1[Retrieve Top-15]
+    R1 --> G[Cross-Encoder Grader \n Keep Top-10]
+    G -->|"✅ Context Sufficient"| GEN[Generate Answer]
+    G -->|"❌ Context Insufficient"| RW[Rewrite Query]
     RW --> R2[Re-Retrieve]
-    R2 --> GEN
-    WS --> GEN
-    GEN --> HC[Hallucination Check]
-    HC -->|"✅ Faithful"| A[Final Answer]
-    HC -->|"❌ Hallucinated"| RG[Re-Generate]
-    RG --> A
+    R2 --> G
+    GEN --> A[Final Answer]
 ```
 
 **Component Choices:**
 
 | Component | Choice | Rationale |
 |-----------|--------|-----------|
-| **Embedding Model** | `sentence-transformers/all-MiniLM-L6-v2` | Same as baseline for fair comparison |
+| **Embedding Model** | `BAAI/bge-small-en-v1.5` | High performance, lightweight embedding model |
 | **Vector Store** | ChromaDB | Same as baseline for fair comparison |
-| **Retrieval** | Top-K + Relevance Grading | Core CRAG mechanism |
-| **Reranker** | `cross-encoder/ms-marco-MiniLM-L-6-v2` | Lightweight cross-encoder for scored relevance |
-| **Relevance Grader** | GPT-4o-mini (structured output) | Binary relevant/irrelevant classification per document |
-| **Query Rewriter** | GPT-4o-mini | Transform ambiguous/failed queries into better search terms |
-| **Web Search Fallback** | Tavily API | External knowledge when internal retrieval fails |
-| **Hallucination Checker** | GPT-4o-mini (structured output) | Verify generated answer is grounded in context |
+| **Query Expander** | GPT-4o-mini | Hypothetical Document Embeddings (HyDE) zero-shot expansion |
+| **Retrieval** | Top-15 cosine similarity | Expanded pool for the reranker |
+| **Relevance Grader** | `cross-encoder/ms-marco-MiniLM-L-6-v2` | Fast, local cross-encoder to filter and rank chunks |
+| **Query Rewriter** | GPT-4o-mini | Transform failed queries into better search terms |
 | **Generator LLM** | GPT-4o-mini | Same model as baseline for fair comparison |
 | **Orchestrator** | LangGraph | Stateful, graph-based workflow with conditional routing |
-
-> **📝 Research Required:** Evaluate whether to use LangGraph or a custom state machine for CRAG orchestration. LangGraph provides built-in state management, conditional routing, and trace logging, but adds dependency complexity.
-
-> **📝 Research Required:** Decide on web search fallback provider: **Tavily** (purpose-built for RAG, has free tier) vs **DuckDuckGo Search** (free, no API key needed) — tradeoff between quality and simplicity.
 
 **Implementation Outline:**
 
@@ -252,17 +242,13 @@ graph TB
 class CorrectiveRAGAgent(BaseAgent):
     """
     Self-correcting RAG pipeline built with LangGraph.
-    Implements: Relevance Grading → Query Rewriting → Web Fallback → Hallucination Check
+    Implements: Query Expansion → Retrieval → Relevance Grading → (Generate | Rewrite)
     """
 
     def __init__(self, config):
         self.retriever = VectorStoreRetriever(config.vector_store)
         self.reranker = CrossEncoderReranker(config.reranker_model)
         self.llm = ChatOpenAI(model=config.model, temperature=0)
-        self.grader = RelevanceGrader(self.llm)
-        self.rewriter = QueryRewriter(self.llm)
-        self.web_search = TavilySearch(api_key=config.tavily_key)
-        self.hallucination_checker = HallucinationChecker(self.llm)
         self.graph = self._build_graph()
 
     def _build_graph(self):
@@ -270,33 +256,28 @@ class CorrectiveRAGAgent(BaseAgent):
         workflow = StateGraph(AgentState)
 
         # Define nodes
-        workflow.add_node("retrieve", self.retrieve_node)
-        workflow.add_node("grade_documents", self.grade_documents_node)
-        workflow.add_node("rewrite_query", self.rewrite_query_node)
-        workflow.add_node("web_search", self.web_search_node)
-        workflow.add_node("generate", self.generate_node)
-        workflow.add_node("check_hallucination", self.hallucination_check_node)
+        workflow.add_node("expand", self._expand_query)
+        workflow.add_node("retrieve", self._retrieve)
+        workflow.add_node("grade", self._grade_documents)
+        workflow.add_node("rewrite", self._rewrite_query)
+        workflow.add_node("generate", self._generate)
 
         # Define edges with conditional routing
-        workflow.set_entry_point("retrieve")
-        workflow.add_edge("retrieve", "grade_documents")
+        workflow.set_entry_point("expand")
+        workflow.add_edge("expand", "retrieve")
+        workflow.add_edge("retrieve", "grade")
+        
         workflow.add_conditional_edges(
-            "grade_documents",
-            self.route_after_grading,
+            "grade",
+            self._route_after_grading,
             {
-                "relevant": "generate",
-                "rewrite": "rewrite_query",
-                "web_search": "web_search"
+                "generate": "generate",
+                "rewrite": "rewrite"
             }
         )
-        workflow.add_edge("rewrite_query", "retrieve")   # Loop back for re-retrieval
-        workflow.add_edge("web_search", "generate")
-        workflow.add_edge("generate", "check_hallucination")
-        workflow.add_conditional_edges(
-            "check_hallucination",
-            self.route_after_hallucination_check,
-            {"faithful": END, "regenerate": "generate"}
-        )
+        
+        workflow.add_edge("rewrite", "retrieve")   # Loop back for re-retrieval
+        workflow.add_edge("generate", END)         # Finish execution
 
         return workflow.compile()
 
