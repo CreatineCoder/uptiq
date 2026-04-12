@@ -37,7 +37,7 @@ PLOTLY_THEME = dict(
     legend=dict(bgcolor="rgba(0,0,0,0.3)", font=dict(color="#e2e8f0"), bordercolor=GRID_COLOR, borderwidth=1),
     xaxis=dict(gridcolor=GRID_COLOR, color="#94a3b8", zerolinecolor=GRID_COLOR),
     yaxis=dict(gridcolor=GRID_COLOR, color="#94a3b8", zerolinecolor=GRID_COLOR),
-    margin=dict(t=50, b=40, l=50, r=20),
+    margin=dict(t=50, b=60, l=65, r=20),
 )
 
 CUSTOM_CSS = """
@@ -63,8 +63,8 @@ CUSTOM_CSS = """
     .metric-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-top: 12px; }
     .metric-item { text-align: center; }
     .metric-value { font-size: 22px; font-weight: 700; color: #f1f5f9; }
-    .metric-label { font-size: 10px; color: #64748b; text-transform: uppercase; letter-spacing: 0.08em; margin-top: 2px; }
-    .metric-delta { font-size: 11px; margin-top: 3px; }
+    .metric-label { font-size: 12px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.08em; margin-top: 2px; }
+    .metric-delta { font-size: 12px; margin-top: 3px; }
     .delta-pos { color: #22c55e; }
     .delta-neg { color: #ef4444; }
     .delta-neu { color: #64748b; }
@@ -221,12 +221,16 @@ def chart_radar(analysis: dict) -> go.Figure:
         polar=dict(
             bgcolor=BG_COLOR,
             radialaxis=dict(gridcolor=GRID_COLOR, color="#64748b", range=[0, 0.6]),
-            angularaxis=dict(gridcolor=GRID_COLOR, color="#94a3b8"),
+            angularaxis=dict(
+                gridcolor=GRID_COLOR,
+                color="#cbd5e1",
+                tickfont=dict(size=13, color="#cbd5e1"),
+            ),
         ),
-        height=380,
+        height=420,
         **{k: v for k, v in PLOTLY_THEME.items() if k not in ("xaxis", "yaxis", "margin")},
         title=dict(text="Multi-Dimensional Radar", font=dict(size=14, color="#e2e8f0")),
-        margin=dict(t=50, b=20, l=40, r=40),
+        margin=dict(t=60, b=60, l=80, r=80),
     )
     return fig
 

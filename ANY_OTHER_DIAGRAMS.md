@@ -1,3 +1,377 @@
 # Auxiliary Diagrams
 
-This document will hold any additional diagrams, flowcharts, or performance comparison heatmaps generated from the benchmark.
+Supplementary flowcharts, sequence diagrams, schema maps, and decision trees for the RAG Benchmarking Framework. These complement the high-level architecture in [ARCHITECTURE.md](ARCHITECTURE.md).
+
+---
+
+## 1. Prompt Flow Diagram
+
+Shows the four LLM prompts used by Agentic RAG, their inputs, and what each output feeds into.
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                        AGENTIC RAG — PROMPT FLOW                         │
+└──────────────────────────────────────────────────────────────────────────┘
+
+  INPUT: user question
+       │
+       ▼
+┌─────────────────────────────────────────────────────┐
+│  PROMPT 1: query_expansion.txt                      │
+│                                                     │
+│  Input:  {question}                                 │
+│  Task:   Generate a hypothetical Wikipedia passage  │
+│          that would contain the answer              │
+│  Output: hyde_passage  (stored separately)          │
+└──────────────────────┬──────────────────────────────┘
+                       │ hyde_passage
+                       ▼
+              [ RETRIEVE NODE — no LLM call ]
+              (dual-pass vector search + RRF)
+                       │
+                       │  if top_score < 0.90
+                       ▼
+┌─────────────────────────────────────────────────────┐
+│  PROMPT 2: agentic_rag_grader.txt  (LLM fallback)   │
+│                                                     │
+│  Input:  {document}, {question}                     │
+│  Task:   Is this document relevant? Answer yes/no   │
+│  Output: "yes" | "no"  per chunk                    │
+│                                                     │
+│  NOTE: Only used if CrossEncoder is unavailable.    │
+│  Normal path uses ms-marco-MiniLM-L-6-v2 locally.  │
+└──────────────────────┬──────────────────────────────┘
+                       │ relevant_docs (filtered)
+                       │
+          ┌────────────┴──────────────┐
+          │ if relevant < min_docs    │ if relevant >= min_docs
+          ▼                           ▼
+┌──────────────────────┐    ┌──────────────────────────────────────────┐
+│  PROMPT 3:           │    │  PROMPT 4: agentic_rag_generator.txt     │
+│  agentic_rag_        │    │                                          │
+│  rewriter.txt        │    │  Input:  {context}, {question}           │
+│                      │    │  Task:   Synthesize answer by connecting │
+│  Input:              │    │          evidence across passages.        │
+│    {question}        │    │          Explicitly reason step-by-step  │
+│    {retrieval_       │    │          for multi-hop questions.         │
+│     summary}         │    │  Output: final answer string             │
+│  Task: Rewrite       │    └──────────────────────────────────────────┘
+│  query based on      │
+│  what failed         │
+│  Output: new query   │
+└──────────┬───────────┘
+           │ new current_query
+           └──────────▶ [ back to RETRIEVE NODE ]
+                           (max 1 retry)
+```
+
+---
+
+## 2. Query Lifecycle — Sequence Diagrams
+
+### 2a. Easy Query (High-Confidence Path — 3 steps)
+
+```
+  User      Expand     Retrieve    Grade     Generate
+   │           │           │          │          │
+   │──question─▶           │          │          │
+   │           │──HyDE─────▶          │          │
+   │           │  prompt   │          │          │
+   │           │           │──pass1───▶          │
+   │           │           │  (query) │          │
+   │           │           │──pass2───▶          │
+   │           │           │  (HyDE)  │          │
+   │           │           │──RRF─────▶          │
+   │           │           │  merge   │          │
+   │           │           │          │          │
+   │           │     top_score=0.93   │          │
+   │           │     >= 0.90 ✓        │          │
+   │           │     GRADE SKIPPED ──────────────▶
+   │           │                      │          │──synthesize─▶
+   │           │                      │          │  answer
+   │◀──────────────────────────────────────answer─┘
+   │
+Steps: [expand, retrieve(high_conf=0.93_grade_skipped), generate]
+Time:  ~2–3 seconds
+LLM calls: 2  (expand + generate)
+```
+
+### 2b. Hard Multi-Hop Query (Rewrite Path — 7 steps)
+
+```
+  User      Expand     Retrieve    Grade     Rewrite   Retrieve   Grade    Generate
+   │           │           │          │          │          │         │         │
+   │──question─▶           │          │          │          │         │         │
+   │           │──HyDE─────▶          │          │          │         │         │
+   │           │           │──RRF─────▶          │          │         │         │
+   │           │           │  top=0.61│          │          │         │         │
+   │           │           │  < 0.90  │          │          │         │         │
+   │           │           │          │──CE score─▶         │         │         │
+   │           │           │          │  0 pass  │          │         │         │
+   │           │           │          │  threshold          │         │         │
+   │           │           │          │──▶ rewrite──────────▶         │         │
+   │           │           │          │          │──new query▶         │         │
+   │           │           │          │          │          │──RRF────▶         │
+   │           │           │          │          │          │  top=0.71│         │
+   │           │           │          │          │          │  < 0.90  │         │
+   │           │           │          │          │          │          │─CE score─▶
+   │           │           │          │          │          │          │ 3 pass  │
+   │           │           │          │          │          │          │─▶ generate
+   │◀──────────────────────────────────────────────────────────────answer─────────┘
+   │
+Steps: [expand, retrieve(0.61), grade(0_relevant), rewrite,
+        retrieve(0.71), grade(3_relevant), generate]
+Time:  ~6–10 seconds
+LLM calls: 3  (expand + rewrite + generate)
+```
+
+---
+
+## 3. Data Schema — Record at Each Pipeline Stage
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│  STAGE 1: Raw HotpotQA (HuggingFace datasets)                           │
+├─────────────────────────────────────────────────────────────────────────┤
+│  {                                                                       │
+│    "id":              "5a8b4b0a55429940ec68a6bb",                        │
+│    "question":        "What nationality is the director of...",          │
+│    "answer":          "American",                                        │
+│    "context": {                                                          │
+│      "title":     ["Film Title", "Director Name"],                       │
+│      "sentences": [["S1","S2","S3"], ["S4","S5"]]                        │
+│    },                                                                    │
+│    "supporting_facts": { "title": [...], "sent_id": [...] },             │
+│    "type": "bridge",   "level": "medium"                                 │
+│  }                                                                       │
+└──────────────────────────┬──────────────────────────────────────────────┘
+                           │ data_loader.py preprocessing
+                           ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│  STAGE 2: benchmark_dataset.jsonl  (1,100 records)                      │
+├─────────────────────────────────────────────────────────────────────────┤
+│  {                                                                       │
+│    "id":              "hotpot_5a8b4b0a55429940ec68a6bb",                 │
+│    "question":        "What nationality is the director of...",          │
+│    "gold_answer":     "American",                                        │
+│    "gold_context":    "Title: Film Title\nS1 S2 S3\n\nTitle: Director\n  │
+│                        S4 S5",           ← reconstructed passage string  │
+│    "dataset":         "hotpotqa",                                        │
+│    "difficulty":      "multi-hop",                                       │
+│    "supporting_facts": { "titles": [...], "sent_ids": [...] }            │
+│  }                                                                       │
+└──────────────────────────┬──────────────────────────────────────────────┘
+                           │ benchmark_runner.py + agent.answer()
+                           ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│  STAGE 3: agentic_rag_results_<timestamp>.jsonl  (1,100 records)         │
+├─────────────────────────────────────────────────────────────────────────┤
+│  {                                                                       │
+│    "query_id":          "hotpot_5a8b4b...",                              │
+│    "agent_type":        "agentic_rag",                                   │
+│    "question":          "What nationality is the director of...",        │
+│    "gold_answer":       "American",                                      │
+│    "predicted_answer":  "American",                                      │
+│    "dataset":           "hotpotqa",                                      │
+│    "difficulty":        "multi-hop",                                     │
+│    "retrieved_contexts": ["chunk1 text...", "chunk2 text...", ...],      │
+│    "latency":           4.23,        ← seconds                           │
+│    "token_usage":       { "prompt_tokens": 1820,                         │
+│                           "completion_tokens": 12,                       │
+│                           "total_tokens": 1832 },                        │
+│    "cost_usd":          0.000312,                                        │
+│    "steps":             ["expand", "retrieve(0.71)",                     │
+│                           "grade(3_relevant)", "generate"],              │
+│    "metrics": {                                                          │
+│      "exact_match":  1.0,                                                │
+│      "f1":           1.0,                                                │
+│      "recall_at_5":  1.0,                                                │
+│      "mrr":          1.0                                                 │
+│    },                                                                    │
+│    "metadata": {                                                         │
+│      "rewrites":       0,                                                │
+│      "original_query": "What nationality...",                            │
+│      "final_query":    "What nationality..."                             │
+│    }                                                                     │
+│  }                                                                       │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 4. LLM-as-a-Judge Scoring Rubric
+
+GPT-4o-mini evaluates each predicted answer against the gold answer on three criteria, each scored 1–5.
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                     LLM-AS-A-JUDGE RUBRIC                               │
+└─────────────────────────────────────────────────────────────────────────┘
+
+CRITERION 1: CORRECTNESS
+Is the predicted answer factually accurate compared to the gold answer?
+
+  Score 5 │ Fully correct. Matches gold answer in fact and entity.
+  Score 4 │ Mostly correct. Minor wording difference but same meaning.
+  Score 3 │ Partially correct. Right topic, wrong specific detail.
+  Score 2 │ Mostly wrong. Correct domain but wrong answer.
+  Score 1 │ Completely wrong or "I don't know" when answer exists.
+
+──────────────────────────────────────────────────────────────────────────
+
+CRITERION 2: COMPLETENESS
+Does the answer cover all parts of the question?
+
+  Score 5 │ Answers every sub-part of the question fully.
+  Score 4 │ Answers the main question; minor detail omitted.
+  Score 3 │ Answers part of the question; one sub-part missing.
+  Score 2 │ Significant portions of the question left unanswered.
+  Score 1 │ Does not meaningfully address the question.
+
+──────────────────────────────────────────────────────────────────────────
+
+CRITERION 3: REASONING QUALITY
+For multi-hop questions — does the answer connect evidence correctly?
+
+  Score 5 │ Explicitly connects multiple facts; reasoning chain is clear.
+  Score 4 │ Correct answer reached; implicit reasoning, not fully stated.
+  Score 3 │ Some reasoning shown but a step is missing or unclear.
+  Score 2 │ Answer given without reasoning; lucky guess or partial chain.
+  Score 1 │ Reasoning is wrong, circular, or completely absent.
+
+──────────────────────────────────────────────────────────────────────────
+
+INTERPRETATION:
+
+  Avg score >= 4.0  →  Strong performance on this criterion
+  Avg score 3.0–3.9 →  Moderate; room for improvement
+  Avg score < 3.0   →  Systematic weakness — investigate failure modes
+```
+
+---
+
+## 5. Failure Mode Decision Tree
+
+Exact logic used by `analyzer.py` to classify every result record.
+
+```
+                    ┌─────────────────────┐
+                    │   Result Record     │
+                    │  (predicted_answer, │
+                    │   gold_answer,      │
+                    │   retrieved_contexts│
+                    │   steps, metrics)   │
+                    └──────────┬──────────┘
+                               │
+                               ▼
+                      exact_match == 1.0?
+                      /              \
+                 [Yes]                [No]
+                   /                    \
+        ┌──────────▼──────────┐          ▼
+        │                     │   recall_at_5 == 0.0?
+        │      SUCCESS        │    /              \
+        │                     │ [Yes]              [No]
+        │  Predicted answer   │   /                  \
+        │  matches gold after │  /                    \
+        │  normalization.     │  ▼                     ▼
+        │  Pipeline worked    │ RETRIEVAL           REASONING
+        │  end to end.        │ FAILURE             FAILURE
+        └─────────────────────┘
+                               │                    │
+                               │  Gold answer text  │  Gold answer was
+                               │  was NOT found in  │  in the retrieved
+                               │  any of the top-5  │  chunks but the
+                               │  retrieved chunks. │  LLM still got
+                               │                    │  it wrong.
+                               │  Root cause:       │
+                               │  • query too vague │  Root cause:
+                               │  • entity mismatch │  • multi-hop chain
+                               │  • index gap       │    broken
+                               │                    │  • answer phrased
+                               │                    │    differently
+                               │                    │  • context too long
+                               │
+                               │
+         ┌─────────────────────▼──────────────────────────┐
+         │          LATENCY SPIKE  (Agentic RAG only)      │
+         │                                                  │
+         │  Condition: step trace contains "rewrite" more  │
+         │  than 3 times  (indicates looping behaviour)    │
+         │                                                  │
+         │  In practice: capped at max_rewrite_retries=1   │
+         │  so this category should be near-zero in the    │
+         │  current configuration.                         │
+         └──────────────────────────────────────────────────┘
+```
+
+---
+
+## 6. Cost & Latency Breakdown (Per Query, Expected Ranges)
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│              COST & LATENCY PER QUERY (gpt-4o-mini)              │
+├─────────────────────┬────────────────────┬───────────────────────┤
+│ Agent               │ Avg Latency        │ Approx Cost/Query     │
+├─────────────────────┼────────────────────┼───────────────────────┤
+│ Naive RAG           │ 1.0 – 2.0 s        │ $0.00015 – $0.00025   │
+│ Agentic RAG (easy)  │ 2.0 – 4.0 s        │ $0.00025 – $0.00040   │
+│ Agentic RAG (rewrite│ 5.0 – 10.0 s       │ $0.00040 – $0.00070   │
+│ path)               │                    │                       │
+├─────────────────────┼────────────────────┼───────────────────────┤
+│ LLM Judge (per q)   │ ~1.0 s             │ ~$0.00010             │
+└─────────────────────┴────────────────────┴───────────────────────┘
+
+TOKEN BREAKDOWN — Agentic RAG per query:
+
+  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
+  │    EXPAND    │    │   REWRITE    │    │   GENERATE   │
+  │              │    │  (if needed) │    │              │
+  │ ~400 prompt  │    │ ~600 prompt  │    │ ~1200 prompt │
+  │  ~150 output │    │  ~80 output  │    │   ~15 output │
+  └──────────────┘    └──────────────┘    └──────────────┘
+                                                            
+  CrossEncoder (Grade node): runs locally — zero API cost.
+  BM25 (Retrieve node):      runs locally — zero API cost.
+
+TOTAL ESTIMATED COST — 1,100 queries, both agents + LLM judge:
+  Naive RAG:    1,100 × $0.00020  =  ~$0.22
+  Agentic RAG:  1,100 × $0.00045  =  ~$0.50
+  LLM Judge:    1,100 × $0.00010  =  ~$0.11
+                                    ─────────
+  TOTAL ESTIMATE:                    ~$0.83 – $1.50
+```
+
+---
+
+## 7. Agent Comparison — Side by Side
+
+```
+┌──────────────────────────────┬──────────────────────────────────────────┐
+│         NAIVE RAG            │            AGENTIC RAG                   │
+├──────────────────────────────┼──────────────────────────────────────────┤
+│ Steps per query: 2           │ Steps per query: 3–7                     │
+│ retrieve → generate          │ expand → retrieve → grade →              │
+│                              │ [rewrite → retrieve → grade] → generate  │
+├──────────────────────────────┼──────────────────────────────────────────┤
+│ Retrieval passes: 1          │ Retrieval passes: 2 (dual-pass RRF)      │
+├──────────────────────────────┼──────────────────────────────────────────┤
+│ Retrieval type: Hybrid RRF   │ Retrieval type: Hybrid RRF × 2           │
+│ (dense + BM25, k=10)         │ (query + HyDE, top-20 unique chunks)     │
+├──────────────────────────────┼──────────────────────────────────────────┤
+│ Document filtering: None     │ Document filtering: CrossEncoder >= 0.5  │
+├──────────────────────────────┼──────────────────────────────────────────┤
+│ Self-correction: No          │ Self-correction: Yes (max 1 rewrite)     │
+├──────────────────────────────┼──────────────────────────────────────────┤
+│ Generation prompt: Basic     │ Generation prompt: Multi-hop synthesis   │
+├──────────────────────────────┼──────────────────────────────────────────┤
+│ LLM calls per query: 1       │ LLM calls per query: 2–3                 │
+│ (generate)                   │ (expand + [rewrite] + generate)          │
+├──────────────────────────────┼──────────────────────────────────────────┤
+│ Best for: simple factoid Q's │ Best for: multi-hop / complex reasoning  │
+├──────────────────────────────┼──────────────────────────────────────────┤
+│ Weakness: retrieval failure  │ Weakness: higher latency + cost on easy  │
+│ unrecoverable                │ queries; rewrite doesn't always help     │
+└──────────────────────────────┴──────────────────────────────────────────┘
+```
