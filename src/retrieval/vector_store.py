@@ -73,7 +73,7 @@ class VectorStoreWrapper:
 
         Both retrieval passes contribute to a Reciprocal Rank Fusion score.
         The raw dense relevance score of the best-scoring document is preserved
-        for the CRAG agent's high-confidence skip logic.
+        for the Agentic RAG agent's high-confidence skip logic.
         """
         try:
             dense_docs = self.vector_store.similarity_search_with_relevance_scores(query, k=top_k)

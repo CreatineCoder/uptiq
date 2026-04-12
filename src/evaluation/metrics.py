@@ -2,7 +2,7 @@
 Phase 3.1 — Quantitative Metrics for RAG Evaluation.
 
 Implements: Exact Match (EM), F1 Score, Recall@K, Mean Reciprocal Rank (MRR).
-All metrics follow the standard SQuAD evaluation protocol for normalization.
+All metrics follow the standard QA evaluation protocol for normalization.
 """
 import re
 import string

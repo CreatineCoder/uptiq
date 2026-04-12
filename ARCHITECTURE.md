@@ -17,7 +17,7 @@ The benchmarking framework is organized into a modular pipeline, consisting of D
 │  │ Loader    │    │  Dispatcher  │    └─────────┬───────────┘   │
 │  │           │    │              │              │                │
 │  │ • NQ      │    │              │    ┌─────────▼───────────┐   │
-│  │ • HotpotQA│    │              │───▶│  Agent B: CRAG       │   │
+│  │ • HotpotQA│    │              │───▶│  Agent B: Agentic RAG│   │
 │  └──────────┘    └──────────────┘    └─────────┬───────────┘   │
 │                                                │                │
 │                                     ┌──────────▼──────────┐    │
@@ -42,7 +42,7 @@ The benchmarking framework is organized into a modular pipeline, consisting of D
 ```
 
 ### Components:
-*   **Data Pipeline:** Loads queries from SQuAD/HotpotQA benchmark datasets.
+*   **Data Pipeline:** Loads queries from the HotpotQA benchmark dataset.
 *   **Vector Store:** ChromaDB paired with HuggingFace `bge-small-en-v1.5` embeddings, additionally re-ranked by a Cross-Encoder for high-precision retrieval.
 *   **Benchmarking Runner:** Orchestrates the execution of queries across both agent types concurrently, handling checkpoints and cost-tracking.
 *   **Evaluation Engine:** Computes deterministic metrics (Exact Match, F1, Recall), LLM Judge evaluations, and RAGAS metrics.
@@ -77,9 +77,9 @@ The Naive Retrieval-Augmented Generation approach represents the industry-standa
 
 ---
 
-## 3. Agentic RAG Architecture (Corrective RAG)
+## 3. Agentic RAG Architecture
 
-The Agentic RAG implementation relies on an autonomous architecture called **Corrective RAG (CRAG)**, built using **LangGraph**. It acts as a state machine that evaluates its own retrievals and iteratively corrects mistakes using query rewriting loops. Web search fallbacks are intentionally disabled to enforce strict closed-book evaluation constraints.
+The Agentic RAG implementation is built using **LangGraph** as a state machine that evaluates its own retrievals and iteratively corrects mistakes using query rewriting loops. Web search fallbacks are intentionally disabled to enforce strict closed-book evaluation constraints.
 
 ```text
                        ┌─────────────────┐
@@ -167,7 +167,7 @@ Post-generation, the system relies on a multi-pronged evaluation strategy to pro
          │                          ▼
          │                 [❌ Reasoning Failure]
          │
-         └──────────────────────────┐ (CRAG Retry loops > 3)
+         └──────────────────────────┐ (Agentic RAG Retry loops > 3)
                                     ▼
                            [⚠️ Latency Spike]
 ```

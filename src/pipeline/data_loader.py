@@ -24,10 +24,10 @@ def build_benchmark_dataset():
     
     benchmark_data = []
 
-    # 1. HotpotQA (500 samples)
+    # 1. HotpotQA (1100 samples)
     logging.info("Downloading HotpotQA (fullwiki validation)...")
     hotpot = load_dataset('hotpot_qa', 'fullwiki', split='validation')
-    hotpot_samples = hotpot.select(range(500))
+    hotpot_samples = hotpot.select(range(1100))
     
     for item in tqdm(hotpot_samples, desc="Processing HotpotQA"):
         # Fix: HotpotQA context structure is a dictionary with 'title' and 'sentences' lists
@@ -50,30 +50,7 @@ def build_benchmark_dataset():
             }
         })
 
-    # 2. SQuAD v2 (1000 samples with answers)
-    # Filter to only questions that have at least one answer
-    logging.info("Downloading and filtering SQuAD v2 (validation)...")
-    try:
-        squad = load_dataset('squad_v2', split='validation')
-        # Filter for only answerable questions (where answers['text'] is not empty)
-        squad_answerable = squad.filter(lambda x: len(x['answers']['text']) > 0)
-        squad_samples = squad_answerable.select(range(min(1000, len(squad_answerable))))
-        
-        for item in tqdm(squad_samples, desc="Processing SQuAD"):
-            # squad_v2 has 'question', 'context', and 'answers' (list of dicts)
-            benchmark_data.append({
-                "id": f"squad_{item['id']}",
-                "question": item["question"],
-                "gold_answer": item['answers']['text'][0],
-                "gold_context": item["context"],
-                "dataset": "squad_v2",
-                "difficulty": "single-hop",
-                "supporting_facts": None
-            })
-    except Exception as e:
-        logging.error(f"Failed to load SQuAD: {e}")
-
-    # 3. Save to unified JSONL
+    # 2. Save to unified JSONL
     logging.info(f"Saving {len(benchmark_data)} queries to {output_path}...")
     with open(output_path, "w", encoding="utf-8") as f:
         for entry in benchmark_data:

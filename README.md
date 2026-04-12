@@ -1,12 +1,12 @@
-# Agent Benchmarking: Naive RAG vs Corrective Agentic RAG
+# Agent Benchmarking: Naive RAG vs Agentic RAG
 
-A benchmarking framework that evaluates two RAG agent architectures -- standard linear retrieval (Naive RAG) and a self-correcting agentic pipeline (Corrective RAG) -- across 1,000+ queries with multi-dimensional evaluation metrics, failure analysis, and interactive visualizations.
+A benchmarking framework that evaluates two RAG agent architectures -- standard linear retrieval (Naive RAG) and a self-correcting agentic pipeline (Agentic RAG) -- across 1,000+ queries with multi-dimensional evaluation metrics, failure analysis, and interactive visualizations.
 
 ## Overview
 
 | | |
 |---|---|
-| **Agents** | Naive RAG (baseline) vs Corrective RAG (CRAG) |
+| **Agents** | Naive RAG (baseline) vs Agentic RAG |
 | **Dataset** | HotpotQA (multi-hop reasoning) |
 | **Evaluation** | Exact Match, F1, Recall@5, MRR + RAGAS + LLM-as-a-Judge |
 | **Orchestration** | LangGraph state machine with conditional routing |
@@ -16,7 +16,7 @@ A benchmarking framework that evaluates two RAG agent architectures -- standard 
 
 **Naive RAG** follows a linear retrieve-then-generate pipeline with no self-correction.
 
-**Corrective RAG** is a LangGraph state machine that evaluates its own retrievals and iteratively corrects mistakes:
+**Agentic RAG** is a LangGraph state machine that evaluates its own retrievals and iteratively corrects mistakes:
 
 1. **Query Expansion** -- HyDE generates a hypothetical Wikipedia passage to improve retrieval
 2. **Dual-Pass Retrieval** -- Runs two independent retrieval passes (original query + HyDE), merged via Reciprocal Rank Fusion (RRF)
@@ -30,7 +30,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed diagrams and flow descriptio
 
 | Component | Tool |
 |---|---|
-| LLM | GPT-4o-mini (agents), GPT-4o-mini (judge) |
+| LLM | GPT-4o-mini |
 | Embeddings | BAAI/bge-small-en-v1.5 |
 | Vector Store | ChromaDB + BM25 hybrid retrieval |
 | Re-ranker | cross-encoder/ms-marco-MiniLM-L-6-v2 |
@@ -44,7 +44,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed diagrams and flow descriptio
 ```
 uptiq/
 ├── src/
-│   ├── agents/               # Naive RAG and Corrective RAG implementations
+│   ├── agents/               # Naive RAG and Agentic RAG implementations
 │   ├── retrieval/            # Vector store, chunking, hybrid search
 │   ├── evaluation/           # Metrics, RAGAS, LLM judge, cost tracking
 │   ├── pipeline/             # Benchmark runner, data loader, config
@@ -95,7 +95,7 @@ streamlit run src/visualization/dashboard.py
 
 All settings are in `configs/default.yaml`:
 - `dataset.total_queries` -- Number of queries to benchmark
-- `agents.corrective_rag.max_rewrite_retries` -- Max query rewrite loops
+- `agents.agentic_rag.max_rewrite_retries` -- Max query rewrite loops
 - `evaluation.ragas.enabled` / `evaluation.llm_judge.enabled` -- Toggle evaluation methods
 
 ## Evaluation Framework

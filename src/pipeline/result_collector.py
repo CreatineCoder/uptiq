@@ -24,14 +24,14 @@ class ResultCollector:
         import datetime
         self.timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         self.naive_path = os.path.join(results_dir, f"naive_rag_results_{self.timestamp}.jsonl")
-        self.crag_path = os.path.join(results_dir, f"crag_results_{self.timestamp}.jsonl")
-        
+        self.agentic_rag_path = os.path.join(results_dir, f"agentic_rag_results_{self.timestamp}.jsonl")
+
         # For new unique runs, processed sets start empty
         self.processed_naive = set()
-        self.processed_crag = set()
-        
+        self.processed_agentic_rag = set()
+
         logger.info(f"[ResultCollector] Created target file: {self.naive_path}")
-        logger.info(f"[ResultCollector] Created target file: {self.crag_path}")
+        logger.info(f"[ResultCollector] Created target file: {self.agentic_rag_path}")
     
     def _load_processed_ids(self, filepath: str) -> Set[str]:
         """Read an existing results file and return the set of already-processed query IDs."""
@@ -50,37 +50,37 @@ class ResultCollector:
         """Check if a query has already been processed by a specific agent."""
         if agent_type == "naive_rag":
             return query_id in self.processed_naive
-        elif agent_type == "corrective_rag":
-            return query_id in self.processed_crag
+        elif agent_type == "agentic_rag":
+            return query_id in self.processed_agentic_rag
         return False
-    
+
     def save_result(self, result: Dict):
         """
         Append a single result to the appropriate JSONL file.
-        
+
         Args:
             result: dict containing query_id, agent_type, and all metrics/response data.
         """
         agent_type = result.get("agent_type", "unknown")
-        
+
         if agent_type == "naive_rag":
             filepath = self.naive_path
             self.processed_naive.add(result["query_id"])
-        elif agent_type == "corrective_rag":
-            filepath = self.crag_path
-            self.processed_crag.add(result["query_id"])
+        elif agent_type == "agentic_rag":
+            filepath = self.agentic_rag_path
+            self.processed_agentic_rag.add(result["query_id"])
         else:
             filepath = os.path.join(self.results_dir, f"{agent_type}_results.jsonl")
-        
+
         with open(filepath, "a", encoding="utf-8") as f:
             f.write(json.dumps(result) + "\n")
-    
+
     def load_all_results(self, agent_type: str) -> List[Dict]:
         """Load all saved results for a given agent type."""
         if agent_type == "naive_rag":
             filepath = self.naive_path
-        elif agent_type == "corrective_rag":
-            filepath = self.crag_path
+        elif agent_type == "agentic_rag":
+            filepath = self.agentic_rag_path
         else:
             filepath = os.path.join(self.results_dir, f"{agent_type}_results.jsonl")
         
@@ -97,6 +97,6 @@ class ResultCollector:
     def get_progress(self) -> Dict:
         """Return current progress stats."""
         return {
-            "naive_rag_completed": len(self.processed_naive),
-            "corrective_rag_completed": len(self.processed_crag),
+            "naive_rag_completed":    len(self.processed_naive),
+            "agentic_rag_completed":  len(self.processed_agentic_rag),
         }

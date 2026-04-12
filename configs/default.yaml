@@ -5,18 +5,17 @@
 # Environment variables can be referenced as ${VAR_NAME}.
 
 experiment:
-  name: "naive_rag_vs_crag_benchmark"
+  name: "naive_rag_vs_agentic_rag_benchmark"
   seed: 42
-  description: "Comparing Naive RAG vs Corrective Agentic RAG on NQ + HotpotQA"
+  description: "Comparing Naive RAG vs Agentic RAG on HotpotQA"
 
 # Dataset
 dataset:
   path: "data/processed/benchmark_dataset.jsonl"
-  total_queries: 50     # Set lower for pilot runs (e.g., 50)
+  total_queries: 1100    # Set lower for pilot runs (e.g., 50)
 
 dataset_limits:
-  squad_v2: 0
-  hotpotqa: 50
+  hotpotqa: 1100
   
 # Vector Store
 vector_store:
@@ -35,14 +34,12 @@ agents:
     enabled: true
     model: "gpt-4o-mini"
     temperature: 0.0
-  corrective_rag:
+  agentic_rag:
     enabled: true
     model: "gpt-4o-mini"
     temperature: 0.0
     max_rewrite_retries: 1
-    max_hallucination_retries: 0
     min_relevant_docs: 1
-    tavily_api_key: "${TAVILY_API_KEY}"
 
 # Evaluation
 evaluation:
@@ -58,9 +55,9 @@ evaluation:
   
   # LLM-as-a-Judge
   llm_judge:
-    enabled: false
+    enabled: true
     model: "gpt-4o-mini"        # Switched to 4o-mini per your request
-    sample_size: 1500           # Now grading ALL 1500 queries
+    sample_size: 1100           # Grading all 1100 queries
     criteria: ["correctness", "completeness", "reasoning_quality"]
 
 # Output

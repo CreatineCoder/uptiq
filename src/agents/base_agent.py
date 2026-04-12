@@ -10,7 +10,7 @@ class AgentResponse:
     latency: float
     token_usage: Dict[str, int] # Custom format: {"prompt_tokens": x, "completion_tokens": y, "total_tokens": z}
     steps: List[str]            # Execution trace (e.g., ["retrieve", "grade", "generate"])
-    agent_type: str             # E.g., 'naive_rag' or 'corrective_rag'
+    agent_type: str             # E.g., 'naive_rag' or 'agentic_rag'
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 class BaseAgent(ABC):
