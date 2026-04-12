@@ -4,6 +4,12 @@ A benchmarking framework that evaluates two RAG architectures — a standard lin
 
 ---
 
+## Demo
+
+[Watch the demo video on Loom](https://www.loom.com/share/57a2db491a6b4de4a3f500ec119d382f)
+
+---
+
 ## Overview
 
 | | |
