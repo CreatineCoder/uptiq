@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 class CRAGState(TypedDict):
     question: str               # Original user question
     current_query: str          # May be rewritten
+    hyde_passage: str           # HyDE hypothetical passage (used for dual-pass retrieval)
     retrieved_docs: List[str]   # Raw retrieved document texts
     relevant_docs: List[str]    # Docs that passed the relevance grader
     answer: str                 # Final generated answer
@@ -41,12 +42,15 @@ class CorrectiveRAGAgent(BaseAgent):
 
     # Sub-task B: if the top retrieved doc scores above this threshold (0-1),
     # the retrieval is highly confident and we skip the expensive grading step.
-    HIGH_CONFIDENCE_THRESHOLD = 0.80
+    # Set to 0.90 — only bypass grading when retrieval is near-certain,
+    # which is critical for multi-hop queries that need diverse evidence.
+    HIGH_CONFIDENCE_THRESHOLD = 0.90
 
-    # Sub-task C: cross-encoder relevance scores are raw logits; anything above
-    # this value is treated as relevant. -3.0 is a lenient default for ms-marco models 
-    # to allow partial multi-hop contexts to pass.
-    CROSS_ENCODER_THRESHOLD = -3.0
+    # Sub-task C: cross-encoder relevance scores are raw logits (ms-marco-MiniLM).
+    # Typical score distribution: irrelevant docs score < 0, relevant docs score > 1.
+    # A threshold of 0.5 filters out clearly irrelevant docs while keeping
+    # partial matches useful for multi-hop reasoning.
+    CROSS_ENCODER_THRESHOLD = 0.5
     
     def __init__(self, 
                  vector_store: VectorStoreWrapper, 
@@ -106,61 +110,102 @@ class CorrectiveRAGAgent(BaseAgent):
     # 2. Define each node in the graph
     # -----------------------------------------------------------------------
     def _expand_query(self, state: CRAGState) -> CRAGState:
-        """Node 0: Expand the initial query using a generic hypothetical answer (HyDE approach)."""
-        logger.info(f"[CRAG] EXPAND — Generating hypothetical answer for: '{state['question']}'")
-        
+        """Node 0: Generate a HyDE hypothetical passage for dual-pass retrieval.
+
+        Instead of concatenating the passage with the query (which dilutes the
+        embedding), we store it separately. The retrieve node will run two
+        retrieval passes — one with the original query, one with the HyDE
+        passage — and merge results via Reciprocal Rank Fusion (RRF).
+        """
+        logger.info(f"[CRAG] EXPAND — Generating HyDE passage for: '{state['question']}'")
+
         chain = self.expander_prompt | self.llm
         response = chain.invoke({"question": state["question"]})
         self._accumulate_tokens(response)
-        
-        hypothetical_answer = response.content.strip()
-        expanded_query = f"{state['question']}\n{hypothetical_answer}"
-        
-        logger.info(f"[CRAG] EXPAND — Expanded query length: {len(expanded_query)} chars")
-        
-        state["current_query"] = expanded_query
+
+        hyde_passage = response.content.strip()
+
+        logger.info(f"[CRAG] EXPAND — HyDE passage ({len(hyde_passage)} chars): '{hyde_passage[:120]}...'")
+
+        # Store HyDE passage separately; current_query stays as the original question
+        state["hyde_passage"] = hyde_passage
         state["steps"].append("expand")
         return state
 
     def _retrieve(self, state: CRAGState) -> CRAGState:
-        """Node 1: Retrieve top-10 documents from ChromaDB with relevance scores.
+        """Node 1: Dual-pass retrieval with RRF merge.
 
-        Sub-task B: if the top document's relevance score exceeds HIGH_CONFIDENCE_THRESHOLD,
-        we trust the retrieval and populate relevant_docs immediately, allowing
-        _grade_documents to skip its expensive grading loop entirely.
+        Pass 1 — retrieve using the current query (original or rewritten).
+        Pass 2 — retrieve using the HyDE passage (if available).
+        Merge both result sets via Reciprocal Rank Fusion so that documents
+        appearing in both passes get a significant boost.
+
+        Sub-task B: if the top document's relevance score exceeds
+        HIGH_CONFIDENCE_THRESHOLD, we trust the retrieval and populate
+        relevant_docs immediately, allowing _grade_documents to skip.
         """
         query = state["current_query"]
-        logger.info(f"[CRAG] RETRIEVE — Searching ChromaDB for: '{query}'")
+        hyde = state.get("hyde_passage", "")
+        logger.info(f"[CRAG] RETRIEVE — Dual-pass search. Query: '{query[:80]}...'")
 
         # Reset relevant_docs so stale data from a previous rewrite loop is cleared
         state["relevant_docs"] = []
 
-        # Retrieve top 15 chunks based on the expanded query
-        docs_with_scores = self.vector_store.retrieve_with_scores(query, top_k=20)
+        # ── Pass 1: original / rewritten query ──────────────────────────────
+        pass1 = self.vector_store.retrieve_with_scores(query, top_k=15)
 
-        if not docs_with_scores:
+        # ── Pass 2: HyDE passage (skip if empty, e.g. after a rewrite) ──────
+        pass2 = []
+        if hyde:
+            pass2 = self.vector_store.retrieve_with_scores(hyde, top_k=15)
+
+        # ── Reciprocal Rank Fusion ──────────────────────────────────────────
+        RRF_K = 60  # standard RRF constant
+        doc_scores: dict[str, float] = {}
+        doc_objects: dict[str, tuple] = {}  # content → (Document, best_raw_score)
+
+        for rank, (doc, raw_score) in enumerate(pass1):
+            content = doc.page_content
+            doc_scores[content] = doc_scores.get(content, 0) + 1 / (RRF_K + rank)
+            if content not in doc_objects or raw_score > doc_objects[content][1]:
+                doc_objects[content] = (doc, raw_score)
+
+        for rank, (doc, raw_score) in enumerate(pass2):
+            content = doc.page_content
+            doc_scores[content] = doc_scores.get(content, 0) + 1 / (RRF_K + rank)
+            if content not in doc_objects or raw_score > doc_objects[content][1]:
+                doc_objects[content] = (doc, raw_score)
+
+        # Sort by fused score, keep top 20
+        sorted_contents = sorted(doc_scores.keys(), key=lambda c: doc_scores[c], reverse=True)
+        top_contents = sorted_contents[:20]
+
+        if not top_contents:
             state["retrieved_docs"] = []
             state["top_retrieval_score"] = 0.0
             state["steps"].append("retrieve(no_results)")
-            logger.info("[CRAG] RETRIEVE — ChromaDB returned no documents.")
+            logger.info("[CRAG] RETRIEVE — No documents from either pass.")
             return state
 
-        top_score = docs_with_scores[0][1]
-        doc_texts = [doc.page_content for doc, _ in docs_with_scores]
+        # Use the best raw relevance score (from pass1) for the high-confidence check
+        top_score = doc_objects[top_contents[0]][1]
+        doc_texts = top_contents  # these are page_content strings
 
         state["retrieved_docs"] = doc_texts
         state["top_retrieval_score"] = top_score
 
-        logger.info(f"[CRAG] RETRIEVE — Got {len(doc_texts)} docs. Top similarity score: {top_score:.3f}")
+        logger.info(
+            f"[CRAG] RETRIEVE — Merged {len(pass1)}+{len(pass2)} → {len(doc_texts)} unique docs. "
+            f"Top score: {top_score:.3f}"
+        )
 
-        # Sub-task B: high-confidence skip — bypass the grading node entirely
+        # Sub-task B: high-confidence skip — bypass grading only when near-certain
         if top_score >= self.HIGH_CONFIDENCE_THRESHOLD:
-            # Keep top 5 docs (already sorted by similarity, best first)
             state["relevant_docs"] = doc_texts[:5]
             state["steps"].append(f"retrieve(high_conf={top_score:.2f}_grade_skipped)")
             logger.info(
-                f"[CRAG] RETRIEVE — High confidence hit (score={top_score:.3f} >= {self.HIGH_CONFIDENCE_THRESHOLD}). "
-                f"Grading bypassed. Using top {len(state['relevant_docs'])} docs directly."
+                f"[CRAG] RETRIEVE — High confidence hit (score={top_score:.3f} >= "
+                f"{self.HIGH_CONFIDENCE_THRESHOLD}). Grading bypassed."
             )
         else:
             state["steps"].append(f"retrieve(top_score={top_score:.2f})")
@@ -191,19 +236,33 @@ class CorrectiveRAGAgent(BaseAgent):
         logger.info(f"[CRAG] GRADE — Evaluating {len(docs)} documents for: '{question[:60]}...'")
 
         if self.cross_encoder and docs:
-            # ── Sub-task C: CrossEncoder re-ranking (local, free, fast) ──────────
+            # ── Sub-task C: CrossEncoder re-ranking with threshold filtering ─────
             pairs = [(question, doc) for doc in docs]
             scores = self.cross_encoder.predict(pairs)          # raw logits, list[float]
 
             scored = sorted(zip(scores, docs), reverse=True)   # best scores first
-            # Keep top 10 from the 15 retrieved
-            top_k = min(10, len(scored))
-            relevant = [doc for _, doc in scored[:top_k]]
-            
-            logger.info(
-                f"[CRAG] GRADE (CrossEncoder) — Kept top {top_k}/{len(docs)} docs. "
-                f"Top score: {scored[0][0]:.3f}"
-            )
+
+            # Filter by threshold — only keep genuinely relevant docs
+            relevant = [doc for score, doc in scored if score >= self.CROSS_ENCODER_THRESHOLD]
+
+            # If nothing passes the threshold, leave relevant empty so routing
+            # triggers a rewrite.  The best doc is still available in
+            # retrieved_docs for a last-resort generate after retries exhaust.
+            if not relevant:
+                logger.info(
+                    f"[CRAG] GRADE (CrossEncoder) — All docs below threshold "
+                    f"({self.CROSS_ENCODER_THRESHOLD}). Best score: "
+                    f"{scored[0][0]:.3f}. Will trigger rewrite."
+                )
+
+            if relevant and scored:
+                logger.info(
+                    f"[CRAG] GRADE (CrossEncoder) — Kept {len(relevant)}/{len(docs)} docs "
+                    f"above threshold {self.CROSS_ENCODER_THRESHOLD}. "
+                    f"Top score: {scored[0][0]:.3f}"
+                )
+            else:
+                logger.info("[CRAG] GRADE (CrossEncoder) — No docs available.")
         else:
             # ── Fallback: LLM-based binary grader (original behaviour) ───────────
             logger.info("[CRAG] GRADE (LLM fallback) — CrossEncoder unavailable, using LLM grader.")
@@ -223,25 +282,46 @@ class CorrectiveRAGAgent(BaseAgent):
         return state
     
     def _rewrite_query(self, state: CRAGState) -> CRAGState:
-        """Node 3: Rewrite the query for better retrieval."""
+        """Node 3: Rewrite the query for better retrieval.
+
+        Passes a summary of the top retrieved docs so the rewriter can
+        understand WHY retrieval failed and adjust accordingly.
+        """
         logger.info(f"[CRAG] REWRITE — Rewriting query (attempt {state['retries'] + 1})...")
-        
+
+        # Build a short summary of what was retrieved (first 150 chars of top 3 docs)
+        top_docs = state["retrieved_docs"][:3]
+        retrieval_summary = "\n".join(
+            f"- {doc[:150]}..." for doc in top_docs
+        ) if top_docs else "(no documents retrieved)"
+
         chain = self.rewriter_prompt | self.llm
-        response = chain.invoke({"question": state["current_query"]})
+        response = chain.invoke({
+            "question": state["question"],  # Use original question, not the mangled current_query
+            "retrieval_summary": retrieval_summary,
+        })
         self._accumulate_tokens(response)
-        
+
         new_query = response.content.strip()
         logger.info(f"[CRAG] REWRITE — New query: '{new_query}'")
-        
+
         state["current_query"] = new_query
+        # Clear HyDE passage so the next retrieve uses only the rewritten query
+        state["hyde_passage"] = ""
         state["retries"] += 1
         state["steps"].append("rewrite")
         return state
     
     def _generate(self, state: CRAGState) -> CRAGState:
         """Node 4: Generate an answer from the relevant context."""
-        context = "\n\n".join(state["relevant_docs"])
-        logger.info(f"[CRAG] GENERATE — Generating answer from {len(state['relevant_docs'])} context pieces...")
+        docs = state["relevant_docs"]
+        if not docs:
+            # Fallback: retries exhausted, use top retrieved docs as best effort
+            docs = state["retrieved_docs"][:5]
+            state["relevant_docs"] = docs
+            logger.info(f"[CRAG] GENERATE — No relevant docs; falling back to top {len(docs)} retrieved docs.")
+        context = "\n\n".join(docs)
+        logger.info(f"[CRAG] GENERATE — Generating answer from {len(docs)} context pieces...")
         
         chain = self.generator_prompt | self.llm
         response = chain.invoke({"context": context, "question": state["question"]})
@@ -317,6 +397,7 @@ class CorrectiveRAGAgent(BaseAgent):
         initial_state: CRAGState = {
             "question": query,
             "current_query": query,
+            "hyde_passage": "",
             "retrieved_docs": [],
             "relevant_docs": [],
             "answer": "",
@@ -332,9 +413,13 @@ class CorrectiveRAGAgent(BaseAgent):
         latency = end_time - start_time
         logger.info(f"[CRAG] ========== Completed in {latency:.2f}s | Steps: {final_state['steps']} ==========")
         
+        # Use the full retrieved pool for recall/MRR evaluation (retrieval quality),
+        # not just the filtered relevant_docs (which measures grading quality).
+        eval_contexts = final_state["retrieved_docs"] or final_state["relevant_docs"]
+
         return AgentResponse(
             answer=final_state["answer"],
-            retrieved_contexts=final_state["relevant_docs"],
+            retrieved_contexts=eval_contexts,
             latency=latency,
             token_usage=self._token_usage,
             steps=final_state["steps"],

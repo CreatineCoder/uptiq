@@ -12,11 +12,11 @@ experiment:
 # Dataset
 dataset:
   path: "data/processed/benchmark_dataset.jsonl"
-  total_queries: 15        # Set lower for pilot runs (e.g., 50)
+  total_queries: 50     # Set lower for pilot runs (e.g., 50)
 
 dataset_limits:
-  squad_v2: 10
-  hotpotqa: 5
+  squad_v2: 0
+  hotpotqa: 50
   
 # Vector Store
 vector_store:

@@ -69,33 +69,44 @@ class VectorStoreWrapper:
         return self.vector_store.similarity_search(query, k=top_k)
 
     def retrieve_with_scores(self, query: str, top_k: int = 10) -> List[Tuple[Document, float]]:
-        """Retrieve top_k documents with normalised relevance scores.
-        
-        Performs dense search for precise scoring, then injects BM25 hits
-        with a fallback score so they don't get wrongly flagged as high-confidence
-        but still get graded.
+        """Retrieve top_k documents via RRF-fused dense + BM25 retrieval.
+
+        Both retrieval passes contribute to a Reciprocal Rank Fusion score.
+        The raw dense relevance score of the best-scoring document is preserved
+        for the CRAG agent's high-confidence skip logic.
         """
         try:
             dense_docs = self.vector_store.similarity_search_with_relevance_scores(query, k=top_k)
-            
-            if self.bm25_retriever:
-                self.bm25_retriever.k = top_k
-                bm25_docs = self.bm25_retriever.invoke(query)
-                
-                seen_content = set(doc.page_content for doc, _ in dense_docs)
-                blended = list(dense_docs)
-                
-                for doc in bm25_docs:
-                    if doc.page_content not in seen_content:
-                        # Give pure BM25 hits a conservative relevance score (0.75) 
-                        # This prevents auto-skipping the grade node, forcing evaluation
-                        blended.append((doc, 0.75))
-                        seen_content.add(doc.page_content)
-                        
-                blended.sort(key=lambda x: x[1], reverse=True)
-                return blended[:top_k]
-                
-            return dense_docs
+
+            if not self.bm25_retriever:
+                return dense_docs
+
+            self.bm25_retriever.k = top_k
+            bm25_docs = self.bm25_retriever.invoke(query)
+
+            # ── Reciprocal Rank Fusion ──────────────────────────────────
+            RRF_K = 60
+            rrf_scores: dict[str, float] = {}
+            doc_map: dict[str, tuple] = {}  # content → (Document, best_dense_score)
+
+            for rank, (doc, dense_score) in enumerate(dense_docs):
+                content = doc.page_content
+                rrf_scores[content] = rrf_scores.get(content, 0) + 1 / (RRF_K + rank)
+                doc_map[content] = (doc, dense_score)
+
+            for rank, doc in enumerate(bm25_docs):
+                content = doc.page_content
+                rrf_scores[content] = rrf_scores.get(content, 0) + 1 / (RRF_K + rank)
+                if content not in doc_map:
+                    # BM25-only hit: assign a conservative dense score so it
+                    # never triggers the high-confidence skip but still gets graded
+                    doc_map[content] = (doc, 0.50)
+
+            # Sort by fused score, return with the original dense relevance score
+            sorted_contents = sorted(rrf_scores.keys(), key=lambda c: rrf_scores[c], reverse=True)
+            results = [(doc_map[c][0], doc_map[c][1]) for c in sorted_contents[:top_k]]
+            return results
+
         except Exception:
             docs = self.vector_store.similarity_search(query, k=top_k)
             return [(doc, 0.5) for doc in docs]

@@ -1,6 +1,12 @@
-Please write a brief, generic answer (2-3 lines) to the following question. Make an educated guess using your internal knowledge. Do not worry if you don't know the exact factual details; focus on providing relevant concepts, associative keywords, and the expected structure of the answer. This will be combined with the query to retrieve more relevant documents.
+You are a retrieval assistant. Given a question, write a SHORT hypothetical passage (2-3 sentences) that would directly answer this question. Write it as if it were extracted from a Wikipedia article.
+
+Rules:
+1. Use SPECIFIC names, dates, places, and terms — not vague descriptions.
+2. Stay factual where possible. If unsure of a specific detail, use a plausible placeholder but keep the structure realistic.
+3. Keep it under 50 words total — conciseness improves retrieval precision.
+4. For multi-hop questions involving 2+ entities, write a SEPARATE short passage (1-2 sentences each) for EACH entity, separated by a blank line.
 
 Question:
 {question}
 
-Answer:
+Hypothetical Passage(s):
