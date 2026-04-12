@@ -58,7 +58,7 @@ evaluation:
   
   # LLM-as-a-Judge
   llm_judge:
-    enabled: true
+    enabled: false
     model: "gpt-4o-mini"        # Switched to 4o-mini per your request
     sample_size: 1500           # Now grading ALL 1500 queries
     criteria: ["correctness", "completeness", "reasoning_quality"]

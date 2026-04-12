@@ -62,14 +62,14 @@ def main():
     
     # Run the benchmark
     from src.pipeline.benchmark_runner import BenchmarkRunner
-    from src.analysis.analyzer import generate_analysis_report
+    from src.analysis.analyzer import run_full_analysis
     
     runner = BenchmarkRunner(config_path=args.config, pilot=args.pilot)
     runner.run()
     
     print("\n✅ Benchmark complete! Running failure analyzer...")
     try:
-        generate_analysis_report()
+        run_full_analysis("data/results")
         print("✅ Analysis report generated. Check the Streamlit dashboard!")
     except Exception as e:
         print(f"⚠️ Analysis failed: {e}")
