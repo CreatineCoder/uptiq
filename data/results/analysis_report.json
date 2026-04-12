@@ -1,0 +1,187 @@
+{
+  "naive_rag": {
+    "total_queries": 1100,
+    "failure_modes": {
+      "retrieval_failure": {
+        "count": 487,
+        "percentage": 44.27
+      },
+      "correct": {
+        "count": 328,
+        "percentage": 29.82
+      },
+      "comprehension_failure": {
+        "count": 179,
+        "percentage": 16.27
+      },
+      "incomplete_answer": {
+        "count": 102,
+        "percentage": 9.27
+      },
+      "wrong_reasoning": {
+        "count": 4,
+        "percentage": 0.36
+      }
+    },
+    "avg_metrics": {
+      "avg_exact_match": 0.2982,
+      "avg_f1": 0.3938,
+      "avg_recall_at_5": 0.5209,
+      "avg_mrr": 0.4022
+    },
+    "avg_latency": 1.1699
+  },
+  "agentic_rag": {
+    "total_queries": 50,
+    "failure_modes": {
+      "retrieval_failure": {
+        "count": 25,
+        "percentage": 50.0
+      },
+      "comprehension_failure": {
+        "count": 11,
+        "percentage": 22.0
+      },
+      "correct": {
+        "count": 10,
+        "percentage": 20.0
+      },
+      "incomplete_answer": {
+        "count": 3,
+        "percentage": 6.0
+      },
+      "overcorrection": {
+        "count": 1,
+        "percentage": 2.0
+      }
+    },
+    "avg_metrics": {
+      "avg_exact_match": 0.2,
+      "avg_f1": 0.2798,
+      "avg_recall_at_5": 0.48,
+      "avg_mrr": 0.3606
+    },
+    "avg_latency": 3.2217,
+    "component_analysis": {
+      "total_queries": 50,
+      "rewrites": {
+        "triggered": 4,
+        "trigger_rate": 8.0,
+        "success_rate": 0.0
+      },
+      "web_search": {
+        "triggered": 0,
+        "trigger_rate": 0.0,
+        "success_rate": 0.0
+      },
+      "hallucination_retries": {
+        "triggered": 0,
+        "trigger_rate": 0.0
+      },
+      "step_distribution": {
+        "min": 4,
+        "max": 7,
+        "mean": 4.24,
+        "median": 4.0,
+        "histogram": {
+          "7": 4,
+          "4": 46
+        }
+      }
+    }
+  },
+  "significance_tests": {
+    "exact_match": {
+      "statistic": 12.0,
+      "p_value": 0.7054569861112734,
+      "significant": false,
+      "effect_size": 0.0535,
+      "agentic_rag_mean": 0.2,
+      "naive_mean": 0.18,
+      "agentic_rag_wins": 4,
+      "naive_wins": 3,
+      "ties": 43
+    },
+    "f1": {
+      "statistic": 27.5,
+      "p_value": 0.6185216785269714,
+      "significant": false,
+      "effect_size": 0.0704,
+      "agentic_rag_mean": 0.2798,
+      "naive_mean": 0.259,
+      "agentic_rag_wins": 6,
+      "naive_wins": 5,
+      "ties": 39
+    },
+    "recall_at_5": {
+      "statistic": 5.0,
+      "p_value": 1.0,
+      "significant": false,
+      "effect_size": 0.0,
+      "agentic_rag_mean": 0.48,
+      "naive_mean": 0.48,
+      "agentic_rag_wins": 2,
+      "naive_wins": 2,
+      "ties": 46
+    },
+    "mrr": {
+      "statistic": 31.0,
+      "p_value": 0.05551481539044339,
+      "significant": false,
+      "effect_size": 0.2708,
+      "agentic_rag_mean": 0.3606,
+      "naive_mean": 0.3214,
+      "agentic_rag_wins": 11,
+      "naive_wins": 5,
+      "ties": 34
+    }
+  },
+  "performance_by_dataset": {
+    "nq": {
+      "naive_rag": {},
+      "agentic_rag": {},
+      "naive_count": 0,
+      "agentic_rag_count": 0
+    },
+    "hotpotqa": {
+      "naive_rag": {
+        "avg_exact_match": 0.2982,
+        "avg_f1": 0.3938,
+        "avg_recall_at_5": 0.5209,
+        "avg_mrr": 0.4022
+      },
+      "agentic_rag": {
+        "avg_exact_match": 0.2,
+        "avg_f1": 0.2798,
+        "avg_recall_at_5": 0.48,
+        "avg_mrr": 0.3606
+      },
+      "naive_count": 1100,
+      "agentic_rag_count": 50
+    }
+  },
+  "performance_by_difficulty": {
+    "single-hop": {
+      "naive_rag": {},
+      "agentic_rag": {},
+      "naive_count": 0,
+      "agentic_rag_count": 0
+    },
+    "multi-hop": {
+      "naive_rag": {
+        "avg_exact_match": 0.2982,
+        "avg_f1": 0.3938,
+        "avg_recall_at_5": 0.5209,
+        "avg_mrr": 0.4022
+      },
+      "agentic_rag": {
+        "avg_exact_match": 0.2,
+        "avg_f1": 0.2798,
+        "avg_recall_at_5": 0.48,
+        "avg_mrr": 0.3606
+      },
+      "naive_count": 1100,
+      "agentic_rag_count": 50
+    }
+  }
+}

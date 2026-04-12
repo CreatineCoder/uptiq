@@ -1,0 +1,43 @@
+{
+  "config_hash": "6d768021d8a515e8",
+  "naive_rag_cost": {
+    "total_cost_usd": 0.192296,
+    "total_calls": 1100,
+    "total_prompt_tokens": 1267214,
+    "total_completion_tokens": 3689,
+    "total_tokens": 1270903,
+    "avg_cost_per_call": 0.000175
+  },
+  "agentic_rag_cost": {
+    "total_cost_usd": 0.180539,
+    "total_calls": 1100,
+    "total_prompt_tokens": 899092,
+    "total_completion_tokens": 76126,
+    "total_tokens": 975218,
+    "avg_cost_per_call": 0.000164
+  },
+  "progress": {
+    "naive_rag_completed": 1100,
+    "agentic_rag_completed": 1100
+  },
+  "aggregate_metrics": {
+    "naive_rag": {
+      "count": 1100,
+      "avg_exact_match": 0.2982,
+      "avg_f1": 0.3938,
+      "avg_recall_at_5": 0.5209,
+      "avg_mrr": 0.4022,
+      "avg_latency_s": 1.1699,
+      "total_latency_s": 1286.84
+    },
+    "agentic_rag": {
+      "count": 1100,
+      "avg_exact_match": 0.3118,
+      "avg_f1": 0.4112,
+      "avg_recall_at_5": 0.54,
+      "avg_mrr": 0.4216,
+      "avg_latency_s": 3.7788,
+      "total_latency_s": 4156.7
+    }
+  }
+}

@@ -122,13 +122,8 @@ env.bak/
 venv.bak/
 
 # Project Specific
-data/raw/
-data/processed/
 data/corpus/
-data/results/
-evaluation/results/
-reports/figures/
-artifacts/
+
 
 # OS specific files
 .DS_Store

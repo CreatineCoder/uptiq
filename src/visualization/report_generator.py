@@ -67,8 +67,7 @@ Compare a simple retrieve-then-generate pipeline (Naive RAG) against a self-corr
 ### 2.2 Datasets
 | Dataset | Type | Queries | Purpose |
 |---------|------|---------|---------|
-| Natural Questions (NQ) | Single-hop | 1,000 | Tests query ambiguity and retrieval precision |
-| HotpotQA | Multi-hop | 500 | Tests multi-step reasoning and document synthesis |
+| HotpotQA | Multi-hop | 1,100 | Tests multi-step reasoning and document synthesis |
 
 ### 2.3 Retrieval Configuration
 - **Embedding Model:** BAAI/bge-small-en-v1.5 (384-dim)
